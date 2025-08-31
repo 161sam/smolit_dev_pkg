@@ -1,0 +1,34 @@
+{
+  "name": "smolit-dev",
+  "version": "0.1.0",
+  "description": "One-command Dev-Stack: OpenHands + MCP (SSE) + Claude-Bridge — mit GUI & CLI.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "sd": "./bin/sd"
+  },
+  "files": [
+    "bin/",
+    "templates/",
+    "env.example",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepack": "chmod +x bin/sd bin/bridge.mjs bin/postinstall.mjs",
+    "postinstall": "node ./bin/postinstall.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["openhands", "mcp", "claude", "devstack", "cli"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/<DEIN_USER>/<DEIN_REPO>.git"
+  },
+  "bugs": {
+    "url": "https://github.com/<DEIN_USER>/<DEIN_REPO>/issues"
+  },
+  "homepage": "https://github.com/<DEIN_USER>/<DEIN_REPO>#readme"
+}
+

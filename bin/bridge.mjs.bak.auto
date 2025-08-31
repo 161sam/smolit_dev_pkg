@@ -1,0 +1,89 @@
+#!/usr/bin/env node
+import http from "node:http";
+import { readFileSync, existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || "8815", 10);
+const WORKSPACE = process.env.WORKSPACE_ROOT || `${process.env.HOME}/OpenHands_Workspace`;
+const CLAUDE_MD = process.env.CLAUDE_MD_PATH || `${process.env.HOME}/CLAUDE.md`;
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LOCAL_BIN = join(__dirname, "..", "node_modules", ".bin");
+
+function resolveClaudeBin() {
+  // 1) explizit via ENV
+  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
+  // 2) lokales Bin aus Dependencies
+  const local = join(LOCAL_BIN, process.platform === "win32" ? "claude.cmd" : "claude");
+  if (existsSync(local)) return local;
+  // 3) global im PATH
+  return "claude"; // notfalls
+}
+
+function runClaude(prompt) {
+  return new Promise((resolve) => {
+    const claudeBin = resolveClaudeBin();
+    const args = ["--yes", "-p", prompt, "--allowed-tools", "sequential-thinking,memory-shared,codex-bridge", "--print"];
+
+    if (existsSync(CLAUDE_MD)) {
+      const sys = readFileSync(CLAUDE_MD, "utf-8");
+      args.splice(2, 0, "--append-system-prompt", sys);
+    }
+
+    let cmd = claudeBin, cmdArgs = args;
+
+    // Falls kein globales/lokales 'claude' aufrufbar, fallback auf npx
+    if (claudeBin === "claude") {
+      // Wir testen schnell, ob 'claude -v' erreichbar ist
+      const test = spawn(claudeBin, ["-v"]);
+      test.on("error", () => {
+        cmd = "npx";
+        cmdArgs = ["-y", "@anthropic-ai/claude-code", ...args];
+      });
+      test.on("close", () => {
+        const p = spawn(cmd, cmdArgs, { cwd: WORKSPACE, stdio: ["ignore", "pipe", "pipe"] });
+        let out = "", err = "";
+        p.stdout.on("data", d => out += d.toString());
+        p.stderr.on("data", d => err += d.toString());
+        p.on("close", () => resolve(out + (err ? `\n[stderr]\n${err}` : "")));
+      });
+      return;
+    }
+
+    const p = spawn(cmd, cmdArgs, { cwd: WORKSPACE, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    p.stdout.on("data", d => out += d.toString());
+    p.stderr.on("data", d => err += d.toString());
+    p.on("close", () => resolve(out + (err ? `\n[stderr]\n${err}` : "")));
+  });
+}
+
+function hostPathFromWorkspace(p) {
+  if (!p?.startsWith("/workspace/")) return null;
+  return join(WORKSPACE, p.slice("/workspace/".length));
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname === "/healthz") { res.writeHead(200).end("ok"); return; }
+    if (url.pathname !== "/run") { res.writeHead(404).end(); return; }
+
+    const f = url.searchParams.get("file");
+    const hostPath = hostPathFromWorkspace(f);
+    if (!hostPath || !existsSync(hostPath)) { res.writeHead(400).end("invalid file"); return; }
+
+    const prompt = readFileSync(hostPath, "utf-8");
+    const output = await runClaude(prompt);
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end(output);
+  } catch (e) {
+    res.writeHead(500).end(String(e));
+  }
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`smolit_dev bridge on :${PORT} (workspace=${WORKSPACE})`);
+});
+

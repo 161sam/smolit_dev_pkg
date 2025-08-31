@@ -1,0 +1,10 @@
+.env
+.env.*
+.mcp/
+.openhands/
+openhands/
+logs/
+**/*.bak*
+**/*.old
+**/*.log
+node_modules/
