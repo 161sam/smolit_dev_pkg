@@ -24,11 +24,11 @@
   "keywords": ["openhands", "mcp", "claude", "devstack", "cli"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<DEIN_USER>/<DEIN_REPO>.git"
+    "url": "git+https://github.com/161sam/smolit_dev_pkg.git"
   },
   "bugs": {
-    "url": "https://github.com/<DEIN_USER>/<DEIN_REPO>/issues"
+    "url": "https://github.com/161sam/smolit_dev_pkg/issues"
   },
-  "homepage": "https://github.com/<DEIN_USER>/<DEIN_REPO>#readme"
+  "homepage": "https://github.com/161sam/smolit_dev_pkg#readme"
 }
 
