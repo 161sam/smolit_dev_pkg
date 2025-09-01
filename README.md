@@ -24,12 +24,16 @@ Bridge: [http://127.0.0.1:8815/healthz](http://127.0.0.1:8815/healthz)
 
 ### 1. Environment
 
+
+**Installation lokal**
 ```bash
-cp env.example ~/.config/smolit_dev/.env
-```
-
-oder mit:
-
+npm i -g .
+````
+**Installation GitHub**
+```bash
+npm i -g github:161sam/smolit_dev_pkg
+````
+**Setup**
 ```bash
 sd keys init   # (optional, falls implementiert)
 ```
@@ -49,40 +53,37 @@ sd keys init   # (optional, falls implementiert)
 * Erfordert Node >= 18
 * Installiert sich als globales CLI (`sd`).
 
+**Installation npm**
+```bash
+npm i -g smolit-dev
+````
+
 ---
 
 ## 🔄 Die sd-Pipeline
 
 Die `sd`-Pipeline verbindet Eingaben, Analyse und KI-Tools:
 
-1. **User Input (unstrukturiert)**
-   *Einfacher Text oder Datei-Inhalt.*
-
----
-2. **OpenHands (strukturierend)**
+1) **User Input (unstrukturiert)**
+   * *Einfacher Text oder Datei-Inhalt.*
+2) **OpenHands (strukturierend)**
    * Läuft in Docker
    * Erkennt Intentionen und strukturiert unklare Eingaben
    * Baut daraus einen validierten Prompt
-
----
-3. **Claude als Supervisor**
+3) **Claude als Supervisor**
    * Empfängt den strukturierten Prompt von OpenHands
    * Agiert als „Supervisor“ und orchestriert die Arbeit
    * Entscheidet, welche Tools/Aktionen erforderlich sind
-
----
-4. **Codex als Worker**
+4) **Codex als Worker**
    * Claude beauftragt Codex (oder ein anderes Modell) mit konkreten Aufgaben
    * Codex führt Code-Analysen, Patch-Erstellung und Refactorings durch
    * Ergebnisse werden zurück in den Pipeline-Kontext gespielt
-
----
-5. **Memory (MCP)**
+5) **Memory (MCP)**
    * Erkenntnisse und Ergebnisse werden ins MCP Memory geschrieben
    * Bleiben für spätere Iterationen abrufbar
 
 Ergebnis: **Von unstrukturiertem Userinput → strukturierter Prompt → konkrete Patches & Next Steps.**
----
+
 ---
 
 ## 🖥️ CLI
@@ -181,11 +182,57 @@ sd up
 
 Öffnet GUI + startet Bridge. Danach können Prompts via Flowise oder n8n durchgereicht werden.
 
+### Konfiguration
+
+Die CLI liest `~/.config/smolit_dev/.env`. 
+
+Wichtige Variablen:
+
+* `WORKSPACE` – wird als `/workspace` in OpenHands gemountet (nur dieses Verzeichnis)
+* `LM_BASE_URL` – z. B. LM Studio: `http://127.0.0.1:1234/v1`
+* Ports: `OH_PORT`, `SEQ_PORT`, `MEM_PORT`, `BRIDGE_PORT`
+* `CLAUDE_API_KEY` / `CODEX_API_KEY` – werden als `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` an die Bridge exportiert
+* `CLAUDE_MD_PATH` – zusätzliche System-Prompt-Datei für Claude
+* `OH_IMAGE`, `RUNTIME_IMAGE` – Container-Images (optional anpassbar)
+
+### Microagents
+
+Beim Start kopiert `sd` Templates nach
+`$WORKSPACE/.openhands/microagents/` (falls nicht vorhanden):
+
+* `send-to-claude.md` – Trigger `@init`, schreibt `init_prompt.txt`, ruft Bridge:
+  `http://host.docker.internal:8815/run?file=/workspace/.openhands/init_prompt.txt`
+* `talk-to-claude.md` – Trigger `@c`, schreibt `followup_prompt.txt`, ruft Bridge:
+  `http://host.docker.internal:8815/run?file=/workspace/.openhands/followup_prompt.txt`
+
+> Wichtig: Der OpenHands-Container erreicht den Host via
+> `host.docker.internal` (in `sd` bereits mit `--add-host …` gesetzt).
+
+### Health-Checks:
+
+```bash
+curl -sSf http://127.0.0.1:3311       # GUI
+curl -sSf http://127.0.0.1:8811/healthz  # SSE seq
+curl -sSf http://127.0.0.1:8812/healthz  # SSE mem
+curl -sSf http://127.0.0.1:8815/healthz  # Bridge
+```
+
 ### Typische Probleme
 
 * **Port belegt** → `sd ports doctor`
 * **Docker nicht läuft** → `systemctl start docker`
 * **Bridge EPIPE** → wird automatisch mit Retry behandelt
+
+### Troubleshooting
+
+* **GUI loggt `0.0.0.0:3000`**: Das ist normal (Container-intern). Lokal öffnest du
+  `http://127.0.0.1:3311`.
+* **Bridge 400/invalid file**: Pfade **müssen** mit `/workspace/…` beginnen.
+  Die Bridge mappt auf `$WORKSPACE`.
+* **`claude` nicht gefunden**: Die Bridge fällt auf `npx @anthropic-ai/claude-code` zurück.
+  Optional global installieren:
+  `npm i -g @anthropic-ai/claude-code @openai/codex`
+* **Docker-Permissions**: ggf. User zur `docker`-Gruppe hinzufügen und neu einloggen.
 
 ### Logs
 
