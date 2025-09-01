@@ -17,10 +17,19 @@ One-command Dev-Stack für **OpenHands + MCP (SSE) + Claude-Bridge** – mit GUI
 - `curl` (und optional `jq`)
 - LM Studio o. ä. unter `LM_BASE_URL` (Standard: `http://127.0.0.1:1234/v1`)
 
-## Installation (lokal, ohne Publish)
+## Installation 
 
+**lokal**
 ```bash
 npm i -g .
+````
+**npm**
+```bash
+npm i -g smolit-dev
+````
+**GitHub**
+```bash
+npm i -g github:161sam/smolit_dev_pkg
 ````
 
 > Bei erstem Install fragt das `postinstall`-Script optional, ob globale CLIs
