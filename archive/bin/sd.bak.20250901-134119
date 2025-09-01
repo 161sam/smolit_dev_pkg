@@ -247,7 +247,6 @@ _render_template() {
 }
 
 # ===== Bridge =====
-
 start_bridge() {
   require_node18
   if _port_in_use "$BRIDGE_PORT"; then
@@ -263,22 +262,11 @@ start_bridge() {
     $( [[ -n "$SD_BYPASS_PERMISSIONS" ]] && echo "--dangerously-skip-permissions" ) \
     >>"$LOG_DIR/bridge.log" 2>&1 &
   echo $! >"$(pidfile bridge)"
-
-  # Auf healthz warten (max ~5s). Wenn's nicht klappt: Logauszug + Fehler.
-  ok=0
   for _ in {1..20}; do
     sleep 0.25
-    if curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1; then ok=1; break; fi
+    curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1 && break || true
   done
-  if [[ "$ok" != "1" ]]; then
-    echo "[sd err] Bridge antwortet nicht auf /healthz. Log-Ausschnitt:"
-    echo "------------------------------------------"
-    tail -n 80 "$LOG_DIR/bridge.log" || echo "(kein bridge.log gefunden)"
-    echo "------------------------------------------"
-    die "Bridge-Start fehlgeschlagen."
-  fi
 }
-
 
 stop_bridge() {
   if is_running bridge; then

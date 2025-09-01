@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PromptSchema",
+  "type": "object",
+  "required": ["goal", "context", "constraints", "definition_of_done"],
+  "properties": {
+    "goal": {"type": "string", "minLength": 3},
+    "context": {"type": "string"},
+    "constraints": {"type": "array", "items": {"type": "string"}},
+    "artifacts": {"type": "array", "items": {"type": "string"}},
+    "repos": {"type": "array", "items": {"type": "string"}},
+    "tools": {"type": "array", "items": {"type": "string"}},
+    "risk": {"type": "string", "enum": ["low","medium","high"]},
+    "preferred_style": {"type": "string"},
+    "definition_of_done": {"type": "array", "items": {"type": "string"}}
+  }
+}
+

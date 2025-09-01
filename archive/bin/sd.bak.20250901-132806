@@ -247,7 +247,6 @@ _render_template() {
 }
 
 # ===== Bridge =====
-
 start_bridge() {
   require_node18
   if _port_in_use "$BRIDGE_PORT"; then
@@ -263,22 +262,11 @@ start_bridge() {
     $( [[ -n "$SD_BYPASS_PERMISSIONS" ]] && echo "--dangerously-skip-permissions" ) \
     >>"$LOG_DIR/bridge.log" 2>&1 &
   echo $! >"$(pidfile bridge)"
-
-  # Auf healthz warten (max ~5s). Wenn's nicht klappt: Logauszug + Fehler.
-  ok=0
   for _ in {1..20}; do
     sleep 0.25
-    if curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1; then ok=1; break; fi
+    curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1 && break || true
   done
-  if [[ "$ok" != "1" ]]; then
-    echo "[sd err] Bridge antwortet nicht auf /healthz. Log-Ausschnitt:"
-    echo "------------------------------------------"
-    tail -n 80 "$LOG_DIR/bridge.log" || echo "(kein bridge.log gefunden)"
-    echo "------------------------------------------"
-    die "Bridge-Start fehlgeschlagen."
-  fi
 }
-
 
 stop_bridge() {
   if is_running bridge; then
@@ -474,12 +462,12 @@ llm_use() {
 # ===== Bridge I/O =====
 
 
-
 send_to_bridge_file() {
   local file="$1"
   [[ -f "$file" ]] || die "Datei nicht gefunden: $file"
 
   local base="${SD_BRIDGE_ENDPOINT_BASE:-http://127.0.0.1:${BRIDGE_PORT}}"
+  # Custom endpoint erlaubt (z.B. http://.../api/run) – ansonsten probieren wir eine Matrix.
   local endpoint="${SD_BRIDGE_ENDPOINT:-}"
 
   local mode="${SD_BRIDGE_PATH_MODE:-auto}"     # auto|local|container
@@ -487,55 +475,55 @@ send_to_bridge_file() {
   local abs="$(_realpath "$file")"
   local cpath="/workspace${file#"$WORKSPACE"}"
 
-  # Kandidaten: in 'auto' IMMER beide testen (Host+Container)
-  local candidates=()
-  case "$mode" in
-    container) candidates=("$cpath");;
-    local)     candidates=("$abs");;
-    auto|*)    candidates=("$abs" "$cpath");;
-  esac
+  # Pfadwahl
+  local chosen="$abs"
+  if [[ "$mode" == "container" ]]; then chosen="$cpath"
+  elif [[ "$mode" == "auto" ]]; then
+    if grep -q "/workspace" "$LOG_DIR/bridge.log" 2>/dev/null; then chosen="$cpath"; fi
+  fi
 
+  # Kandidaten-Listen
   local paths=("/run" "/run-file" "/api/run" "/v1/run" "/execute" "/api/execute")
   local params=("$fparam" $([[ "$fparam" == "file" ]] && echo "path" || echo "file"))
+  local codes body url method data
 
+  # 1) Fester endpoint? Dann nur den testen (GET + POST)
   if [[ -n "$endpoint" ]]; then
-    for mp in "${candidates[@]}"; do
-      # GET
-      code="$(curl -sS -o /dev/null -w "%{http_code}" --get "$endpoint" --data-urlencode "${fparam}=${mp}" 2>/dev/null || echo 000)"
-      [[ "$code" == "200" ]] && { echo "[sd] Bridge OK via GET $endpoint ($fparam=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"; return 0; }
-      # POST JSON
-      code="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$endpoint" -H 'Content-Type: application/json' -d "{\"${fparam}\":\"${mp}\"}" 2>/dev/null || echo 000)"
-      [[ "$code" == "200" ]] && { echo "[sd] Bridge OK via POST $endpoint ($fparam=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"; return 0; }
-    done
+    # GET
+    url="$endpoint"; method="GET"
+    codes="$(curl -sS -o /dev/null -w "%{http_code}" --get "$url" --data-urlencode "${fparam}=${chosen}" 2>/dev/null || echo 000)"
+    [[ "$codes" == "200" ]] && return 0
+    # POST JSON
+    codes="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$url" -H 'Content-Type: application/json' -d "{\"${fparam}\":\"${chosen}\"}" 2>/dev/null || echo 000)"
+    [[ "$codes" == "200" ]] && return 0
   else
+    # 2) Matrix: Pfade × Param-Namen × (GET, POST) × (local/container)
     for p in "${paths[@]}"; do
       for prm in "${params[@]}"; do
-        for mp in "${candidates[@]}"; do
-          # GET
-          code="$(curl -sS -o /dev/null -w "%{http_code}" --get "${base}${p}" --data-urlencode "${prm}=${mp}" 2>/dev/null || echo 000)"
-          if [[ "$code" == "200" ]]; then
-            echo "[sd] Bridge OK via GET ${p} (${prm}=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"
-            return 0
-          fi
-          # POST JSON
-          code="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${base}${p}" -H 'Content-Type: application/json' -d "{\"${prm}\":\"${mp}\"}" 2>/dev/null || echo 000)"
-          if [[ "$code" == "200" ]]; then
-            echo "[sd] Bridge OK via POST ${p} (${prm}=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"
-            return 0
-          fi
-        done
+        # GET
+        url="${base}${p}"; method="GET"; data="${prm}=${chosen}"
+        codes="$(curl -sS -o /dev/null -w "%{http_code}" --get "$url" --data-urlencode "$data" 2>/dev/null || echo 000)"
+        if [[ "$codes" == "200" ]]; then
+          echo "[sd] Bridge OK via GET $p ($prm=$( [[ "$chosen" == "$abs" ]] && echo local || echo container))"
+          return 0
+        fi
+        # POST JSON
+        codes="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$url" -H 'Content-Type: application/json' -d "{\"${prm}\":\"${chosen}\"}" 2>/dev/null || echo 000)"
+        if [[ "$codes" == "200" ]]; then
+          echo "[sd] Bridge OK via POST $p ($prm=$( [[ "$chosen" == "$abs" ]] && echo local || echo container))"
+          return 0
+        fi
       done
     done
   fi
 
-  # Debug-Ausgabe der letzten Antwort
-  local url="${base}/run"
-  local body="$(curl -sS --get "$url" --data-urlencode "${fparam}=${cpath}" 2>&1 || true)"
-  echo "[sd err] Bridge-Aufruf fehlgeschlagen. Letzte Antwort von $url (mit /workspace):"
+  # Letzter Versuch: Body debuggen (nur 1x kurz)
+  url="${base}/run"
+  body="$(curl -sS --get "$url" --data-urlencode "${fparam}=${chosen}" 2>&1 || true)"
+  echo "[sd err] Bridge-Aufruf fehlgeschlagen. Letzte Antwort von $url:"
   echo "$body" | sed -n '1,20p'
   return 1
 }
-
 
 
 
@@ -578,8 +566,6 @@ send_to_bridge_prompt() {
 # ===== Bridge Probe =====
 
 probe_bridge() {
-  start_bridge
-  sleep 0.3
   local base="${SD_BRIDGE_ENDPOINT_BASE:-http://127.0.0.1:${BRIDGE_PORT}}"
   local f="$WORKSPACE/.openhands/prompts/init_prompt.txt"
   mkdir -p "$(dirname "$f")"

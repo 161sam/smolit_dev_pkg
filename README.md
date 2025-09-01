@@ -178,9 +178,9 @@ Beim Start kopiert `sd` Templates nach
 `$WORKSPACE/.openhands/microagents/` (falls nicht vorhanden):
 
 - `templates/microagent/send-to-claude.md` – Trigger `@init`, schreibt `init_prompt.txt`, ruft Bridge:  
-  `http://host.docker.internal:8815/run?file=/workspace/.openhands/init_prompt.txt`
+  `http://host.docker.internal:8815/run?file=/workspace/.openhands/prompts/init_prompt.txt`
 - `templates/microagent/talk-to-claude.md` – Trigger `@c`, schreibt `followup_prompt.txt`, ruft Bridge:  
-  `http://host.docker.internal:8815/run?file=/workspace/.openhands/followup_prompt.txt`
+  `http://host.docker.internal:8815/run?file=/workspace/.openhands/prompts/followup_prompt.txt`
 
 Weitere Prompt-Vorlagen liegen unter `templates/prompt/`.
 

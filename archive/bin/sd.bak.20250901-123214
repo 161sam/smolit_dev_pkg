@@ -82,7 +82,6 @@ SD_ALLOWED_TOOLS="${SD_ALLOWED_TOOLS:-sequential-thinking,memory-shared,memory,c
 # ===== Binaries =====
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_BIN="$SELF_DIR/bridge.mjs"
-[[ -n "$SD_BRIDGE_BIN" ]] && BRIDGE_BIN="$SD_BRIDGE_BIN"
 POSTINSTALL_BIN="$SELF_DIR/postinstall.mjs"
 
 # Prompt Templates
@@ -178,38 +177,6 @@ PROMPTS_DIR="$OH_DIR/prompts"
 
 mkdir -p "$MICRO_DIR" "$PROMPTS_DIR"
 
-# --- ensure_oh_dirs: sorgt für .openhands Struktur + repo.md (auto) ---
-ensure_oh_dirs() {
-  mkdir -p "$MICRO_DIR" "$PROMPTS_DIR" "$OH_DIR/logs"
-  if [[ ! -f "$MICRO_DIR/repo.md" ]]; then
-    cat >"$MICRO_DIR/repo.md" <<'MD'
-# Repo Microagent Context (repo.md)
-<repo>
-  <name>{{PROJECT}}</name>
-  <root>{{WORKSPACE}}</root>
-  <langs>python, typescript, bash</langs>
-  <build>npm/yarn + uvicorn/pytest</build>
-  <constraints>
-    - keine Platzhalter, lauffähiger Code
-    - backward-compatible, keine destructive ops ohne Backup
-  </constraints>
-  <contacts>
-    - owner: huckle lab
-  </contacts>
-</repo>
-MD
-    # Platzhalter ersetzen
-    local proj="$(basename "$WORKSPACE")"
-    local w_esc="$(printf '%s' "$WORKSPACE" | sed -e 's/[\/&]/\\&/g')"
-    sed ${SED_INPLACE[@]} \
-      -e "s|{{PROJECT}}|$proj|g" \
-      -e "s|{{WORKSPACE}}|$w_esc|g" \
-      "$MICRO_DIR/repo.md"
-    log "Auto: .openhands/microagents/repo.md erzeugt."
-  fi
-}
-
-
 tail_logs() {
   echo "Logs in: $LOG_DIR"
   echo "Docker logs ($OH_NAME) und bridge.log folgen (Ctrl-C beendet)…"
@@ -247,7 +214,6 @@ _render_template() {
 }
 
 # ===== Bridge =====
-
 start_bridge() {
   require_node18
   if _port_in_use "$BRIDGE_PORT"; then
@@ -263,22 +229,11 @@ start_bridge() {
     $( [[ -n "$SD_BYPASS_PERMISSIONS" ]] && echo "--dangerously-skip-permissions" ) \
     >>"$LOG_DIR/bridge.log" 2>&1 &
   echo $! >"$(pidfile bridge)"
-
-  # Auf healthz warten (max ~5s). Wenn's nicht klappt: Logauszug + Fehler.
-  ok=0
   for _ in {1..20}; do
     sleep 0.25
-    if curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1; then ok=1; break; fi
+    curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1 && break || true
   done
-  if [[ "$ok" != "1" ]]; then
-    echo "[sd err] Bridge antwortet nicht auf /healthz. Log-Ausschnitt:"
-    echo "------------------------------------------"
-    tail -n 80 "$LOG_DIR/bridge.log" || echo "(kein bridge.log gefunden)"
-    echo "------------------------------------------"
-    die "Bridge-Start fehlgeschlagen."
-  fi
 }
-
 
 stop_bridge() {
   if is_running bridge; then
@@ -289,43 +244,17 @@ stop_bridge() {
 }
 
 # ===== OpenHands =====
-
 start_openhands() {
   need docker
   if docker ps --format '{{.Names}}' | grep -q "^${OH_NAME}\$"; then
     warn "OpenHands Container '$OH_NAME' läuft bereits."
     return 0
   fi
-
-  # Wenn OH_IMAGE auf das neue OpenHands-GUI-Image zeigt, verwenden wir die neue Startlogik (Port 3000, richtige Mounts).
-  if [[ "$OH_IMAGE" == docker.all-hands.dev/all-hands-ai/openhands:* ]] || [[ "$OH_IMAGE" == ghcr.io/all-hands-ai/openhands:* ]]; then
-    : "${OH_PORT:=3000}"
-    : "${SANDBOX_RUNTIME_CONTAINER_IMAGE:=docker.all-hands.dev/all-hands-ai/runtime:0.54-nikolaik}"
-
-    log "Starte OpenHands GUI ($OH_IMAGE) → Port $OH_PORT …"
-    docker run -d --rm \
-      --name "$OH_NAME" \
-      --add-host host.docker.internal:host-gateway \
-      -p "$OH_PORT:3000" \
-      -v /var/run/docker.sock:/var/run/docker.sock \
-      -v "$HOME/.openhands:/.openhands" \
-      -e SANDBOX_RUNTIME_CONTAINER_IMAGE="$SANDBOX_RUNTIME_CONTAINER_IMAGE" \
-      "$OH_IMAGE" \
-      >/dev/null || die "Docker-Start fehlgeschlagen."
-
-    # kurze Health-Wartezeit
-    for _ in {1..40}; do
-      sleep 0.25
-      curl -fsS "http://127.0.0.1:$OH_PORT" >/dev/null 2>&1 && break || true
-    done
-    return 0
-  fi
-
-  # Fallback: Alte (legacy) Startlogik für sehr alte Images (supergateway) mit Port 3311 etc.
   if ! curl -fsS -m 1 "$LM_BASE_URL/models" >/dev/null 2>&1; then
     warn "LM_BASE_URL ($LM_BASE_URL) konnte nicht geprüft werden – fahre fort."
   fi
-  log "Starte OpenHands (legacy, $OH_IMAGE) auf Ports GUI:$OH_PORT SEQ:$SEQ_PORT MEM:$MEM_PORT …"
+
+  log "Starte OpenHands ($OH_IMAGE) auf Ports GUI:$OH_PORT SEQ:$SEQ_PORT MEM:$MEM_PORT …"
   docker run -d --rm \
     --name "$OH_NAME" \
     --add-host host.docker.internal:host-gateway \
@@ -333,14 +262,13 @@ start_openhands() {
     -e LM_BASE_URL="$LM_BASE_URL" \
     -v "$WORKSPACE:/workspace" \
     "$OH_IMAGE" \
-    >/dev/null || die "Docker-Start fehlgeschlagen (legacy)."
+    >/dev/null
 
   for _ in {1..40}; do
     sleep 0.25
     curl -fsS "http://127.0.0.1:$OH_PORT" >/dev/null 2>&1 && break || true
   done
 }
-
 
 stop_openhands() {
   if docker ps --format '{{.Names}}' | grep -q "^${OH_NAME}\$"; then
@@ -472,211 +400,23 @@ llm_use() {
 }
 
 # ===== Bridge I/O =====
-
-
-
 send_to_bridge_file() {
   local file="$1"
   [[ -f "$file" ]] || die "Datei nicht gefunden: $file"
-
-  local base="${SD_BRIDGE_ENDPOINT_BASE:-http://127.0.0.1:${BRIDGE_PORT}}"
-  local endpoint="${SD_BRIDGE_ENDPOINT:-}"
-
-  local mode="${SD_BRIDGE_PATH_MODE:-auto}"     # auto|local|container
-  local fparam="${SD_BRIDGE_FILE_PARAM:-file}"  # file|path
-  local abs="$(_realpath "$file")"
-  local cpath="/workspace${file#"$WORKSPACE"}"
-
-  # Kandidaten: in 'auto' IMMER beide testen (Host+Container)
-  local candidates=()
-  case "$mode" in
-    container) candidates=("$cpath");;
-    local)     candidates=("$abs");;
-    auto|*)    candidates=("$abs" "$cpath");;
-  esac
-
-  local paths=("/run" "/run-file" "/api/run" "/v1/run" "/execute" "/api/execute")
-  local params=("$fparam" $([[ "$fparam" == "file" ]] && echo "path" || echo "file"))
-
-  if [[ -n "$endpoint" ]]; then
-    for mp in "${candidates[@]}"; do
-      # GET
-      code="$(curl -sS -o /dev/null -w "%{http_code}" --get "$endpoint" --data-urlencode "${fparam}=${mp}" 2>/dev/null || echo 000)"
-      [[ "$code" == "200" ]] && { echo "[sd] Bridge OK via GET $endpoint ($fparam=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"; return 0; }
-      # POST JSON
-      code="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$endpoint" -H 'Content-Type: application/json' -d "{\"${fparam}\":\"${mp}\"}" 2>/dev/null || echo 000)"
-      [[ "$code" == "200" ]] && { echo "[sd] Bridge OK via POST $endpoint ($fparam=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"; return 0; }
-    done
-  else
-    for p in "${paths[@]}"; do
-      for prm in "${params[@]}"; do
-        for mp in "${candidates[@]}"; do
-          # GET
-          code="$(curl -sS -o /dev/null -w "%{http_code}" --get "${base}${p}" --data-urlencode "${prm}=${mp}" 2>/dev/null || echo 000)"
-          if [[ "$code" == "200" ]]; then
-            echo "[sd] Bridge OK via GET ${p} (${prm}=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"
-            return 0
-          fi
-          # POST JSON
-          code="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${base}${p}" -H 'Content-Type: application/json' -d "{\"${prm}\":\"${mp}\"}" 2>/dev/null || echo 000)"
-          if [[ "$code" == "200" ]]; then
-            echo "[sd] Bridge OK via POST ${p} (${prm}=$( [[ "$mp" == "$abs" ]] && echo local || echo container))"
-            return 0
-          fi
-        done
-      done
-    done
-  fi
-
-  # Debug-Ausgabe der letzten Antwort
-  local url="${base}/run"
-  local body="$(curl -sS --get "$url" --data-urlencode "${fparam}=${cpath}" 2>&1 || true)"
-  echo "[sd err] Bridge-Aufruf fehlgeschlagen. Letzte Antwort von $url (mit /workspace):"
-  echo "$body" | sed -n '1,20p'
-  return 1
+  curl -fsS --get "http://127.0.0.1:$BRIDGE_PORT/run" \
+    --data-urlencode "file=/workspace${file#"$WORKSPACE"}" \
+    || die "Bridge-Aufruf fehlgeschlagen."
 }
-
-
-
-
 
 send_to_bridge_prompt() {
   local prompt="$1"
   [[ -n "${prompt:-}" ]] || die "Leerer Prompt."
-
-  local base="${SD_BRIDGE_ENDPOINT_BASE:-http://127.0.0.1:${BRIDGE_PORT}}"
-  local endpoint="${SD_BRIDGE_ENDPOINT:-}"
-  local paths=("/run" "/api/run" "/v1/run" "/execute" "/api/execute")
-  local codes url
-
-  if [[ -n "$endpoint" ]]; then
-    # GET
-    codes="$(curl -sS -o /dev/null -w "%{http_code}" --get "$endpoint" --data-urlencode "prompt=$prompt" 2>/dev/null || echo 000)"
-    [[ "$codes" == "200" ]] && return 0
-    # POST JSON
-    codes="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$endpoint" -H 'Content-Type: application/json' -d "{\"prompt\":$(printf %s "$prompt" | jq -Rs .)}" 2>/dev/null || echo 000)"
-    [[ "$codes" == "200" ]] && return 0
-  else
-    for p in "${paths[@]}"; do
-      # GET
-      url="${base}${p}"
-      codes="$(curl -sS -o /dev/null -w "%{http_code}" --get "$url" --data-urlencode "prompt=$prompt" 2>/dev/null || echo 000)"
-      if [[ "$codes" == "200" ]]; then echo "[sd] Bridge OK via GET $p"; return 0; fi
-      # POST JSON
-      codes="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$url" -H 'Content-Type: application/json' -d "{\"prompt\":$(printf %s "$prompt" | jq -Rs .)}" 2>/dev/null || echo 000)"
-      if [[ "$codes" == "200" ]]; then echo "[sd] Bridge OK via POST $p"; return 0; fi
-    done
-  fi
-
-  local body="$(curl -sS --get "${base}/run" --data-urlencode "prompt=$prompt" 2>&1 || true)"
-  echo "[sd err] Bridge-Aufruf fehlgeschlagen. Letzte Antwort:"
-  echo "$body" | sed -n '1,20p'
-  return 1
-}
-
-
-# ===== Bridge Probe =====
-
-probe_bridge() {
-  start_bridge
-  sleep 0.3
-  local base="${SD_BRIDGE_ENDPOINT_BASE:-http://127.0.0.1:${BRIDGE_PORT}}"
-  local f="$WORKSPACE/.openhands/prompts/init_prompt.txt"
-  mkdir -p "$(dirname "$f")"
-  [[ -f "$f" ]] || echo "PING" > "$f"
-
-  local abs="$(_realpath "$f")"
-  local cpath="/workspace${f#"$WORKSPACE"}"
-  local paths=("/run" "/run-file" "/api/run" "/v1/run" "/execute" "/api/execute")
-  local modes=("local:$abs" "container:$cpath")
-  local params=("file" "path")
-  local ok=0
-
-  echo "Probing Bridge @ ${base}"
-  for p in "${paths[@]}"; do
-    for m in "${modes[@]}"; do
-      IFS=: read -r mname mp <<<"$m"
-      for prm in "${params[@]}"; do
-        # GET
-        code="$(curl -sS -o /dev/null -w "%{http_code}" --get "${base}${p}" --data-urlencode "${prm}=${mp}" 2>/dev/null || echo 000)"
-        [[ "$code" == "200" ]] && { echo "✓ GET  ${p}  ${prm}=${mname}   (200)"; ok=1; }
-        # POST
-        code="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "${base}${p}" -H 'Content-Type: application/json' -d "{\"${prm}\":\"${mp}\"}" 2>/dev/null || echo 000)"
-        [[ "$code" == "200" ]] && { echo "✓ POST ${p}  ${prm}=${mname}   (200)"; ok=1; }
-      done
-    done
-  done
-
-  if [[ "$ok" == "1" ]]; then
-    echo
-    echo "Tip: Setze passende Defaults in ~/.config/smolit_dev/.env, z.B.:"
-    echo "  SD_BRIDGE_PATH_MODE=container"
-    echo "  SD_BRIDGE_FILE_PARAM=file"
-    echo "  SD_BRIDGE_ENDPOINT_BASE=${base}"
-  else
-    echo
-    echo "Keine Kombination lieferte 200. Prüfe die Bridge-Routen manuell oder setze SD_BRIDGE_ENDPOINT explizit."
-  fi
+  curl -fsS --get "http://127.0.0.1:$BRIDGE_PORT/run" \
+    --data-urlencode "prompt=$prompt" \
+    || die "Bridge-Aufruf fehlgeschlagen."
 }
 
 # ===== Repo Helpers =====
-
-# ===== Microagent Shortcuts =====
-# bauen Prompts aus Templates, hängen optional STDIN an und senden an die Bridge
-cmd_norm() {
-  ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/prompts/normalize_prompt.txt"
-  _render_template "microagent/normalize-user-input.md" "$f"
-  if [[ -n "${SD_INPUT:-}" ]]; then
-    printf "\n<raw_user_input>\n%s\n</raw_user_input>\n" "$SD_INPUT" >> "$f"
-  elif [[ ! -t 0 ]]; then
-    printf "\n<raw_user_input>\n%s\n</raw_user_input>\n" "$(cat)" >> "$f"
-  fi
-  echo -e "\n--- END_OF_PROMPT ---" >> "$f"
-  start_bridge
-  send_to_bridge_file "$f"
-}
-
-cmd_claude_init() {
-  ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/prompts/init_prompt.txt"
-  _render_template "microagent/send-to-claude.md" "$f"
-  echo -e "\n--- END_OF_PROMPT ---" >> "$f"
-  start_bridge
-  send_to_bridge_file "$f"
-}
-
-cmd_codex_brief() {
-  ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/prompts/codex_brief.txt"
-  _render_template "microagent/claude-to-codex.md" "$f"
-  echo -e "\n--- END_OF_CODEX_BRIEF ---" >> "$f"
-  start_bridge
-  send_to_bridge_file "$f"
-}
-
-cmd_claude_fu() {
-  ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/prompts/followup_prompt.txt"
-  _render_template "microagent/talk-to-claude.md" "$f"
-  if [[ -n "${SD_INPUT:-}" ]]; then
-    printf "\n<delta>\n%s\n</delta>\n" "$SD_INPUT" >> "$f"
-  elif [[ ! -t 0 ]]; then
-    printf "\n<delta>\n%s\n</delta>\n" "$(cat)" >> "$f"
-  fi
-  echo -e "\n--- END_OF_FOLLOWUP ---" >> "$f"
-  start_bridge
-  send_to_bridge_file "$f"
-}
-
-cmd_guardrails() {
-  ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/prompts/guardrails_prompt.txt"
-  _render_template "microagent/guardrails.md" "$f"
-  start_bridge
-  send_to_bridge_file "$f"
-}
-
 analyze() {
   ensure_oh_dirs
   local f="$WORKSPACE/.openhands/analyze_prompt.md"
@@ -755,7 +495,6 @@ Usage:
   sd deps install-global   # optionale globale CLIs installieren
   sd deps doctor      # Dependency-Check
   sd ports doctor     # Port-Check
-  sd probe-bridge     # Routen-/Methoden-Autodetect für Bridge
 
   sd project init     # .claude/settings.json (MCP SSE) erzeugen
   sd init             # Projekt-Setup (.claude + .openhands) anlegen
@@ -765,12 +504,6 @@ Usage:
   sd index            # aktuelles Repo indexieren (Knowledge-Map)
   sd test             # Tests laufen lassen + Patch-Vorschläge
   sd next             # nächste Schritte erzeugen
-  sd norm             # Nutzer-Text normalisieren → normalized_input (Prompt)
-  sd claude-init      # Supervisor-Init-Prompt an Claude senden
-  sd codex-brief      # Übergabe-Briefing an Codex senden
-  sd claude-fu        # Follow-up (kleine Schritte) an Claude senden
-  sd guardrails       # Guardrails/Policy an Claude senden
-
 
   sd keys init        # API-Keys setzen (optional)
   sd llm list         # Modelle aus LM Studio anzeigen
@@ -817,13 +550,6 @@ case "$cmd" in
   index)         cmd_index ;;
   test)          cmd_test ;;
   next)          cmd_next ;;
-  norm)          cmd_norm ;;
-  claude-init)   cmd_claude_init ;;
-  codex-brief)   cmd_codex_brief ;;
-  claude-fu)     cmd_claude_fu ;;
-  guardrails)    cmd_guardrails ;;
-  probe-bridge)    probe_bridge ;;
-
   keys)          sub="${1:-}"; shift || true; [[ "${sub:-}" == "init" ]] && keys_init || usage ;;
   llm)           sub="${1:-}"; shift || true; case "${sub:-}" in list) llm_list ;; use) llm_use "${1:-}";; *) usage ;; esac ;;
   start-repl)    start_repl ;;

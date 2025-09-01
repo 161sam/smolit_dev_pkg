@@ -5,11 +5,13 @@ triggers:
 ---
 
 # Zweck
-Nimm den Nutzertext als **Follow-up** zur laufenden Aufgabe und führe Claude aus.
+Sende fokussierte Follow-ups (Delta zum letzten Stand), mit kleinem Tool/Patch-Budget.
 
 # Schritte
-- Erzeuge den Folgeprompt (kurz & fokussiert).
-- Schreibe ihn nach: **/workspace/.openhands/followup_prompt.txt**
-- **Rufe dann** per Browser-Tool diese URL auf und poste den Textinhalt der Antwort:
-  `http://host.docker.internal:8815/run?file=/workspace/.openhands/followup_prompt.txt`
-
+- Erzeuge Follow-up mit Sektionen:
+  <delta>Was hat sich geändert?</delta>
+  <questions>max 3, falls zwingend</questions>
+  <next_atomic_step>1 konkreter Schritt</next_atomic_step>
+- Schreibe nach: **/workspace/.openhands/prompts/followup_prompt.txt**
+- Rufe: `http://host.docker.internal:8815/run?file=/workspace/.openhands/prompts/followup_prompt.txt`
+- Ende: `--- END_OF_FOLLOWUP ---`
