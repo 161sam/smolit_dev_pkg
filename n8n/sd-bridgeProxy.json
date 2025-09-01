@@ -1,0 +1,66 @@
+{
+  "name": "sd-bridge-proxy",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sd/bridge",
+        "options": {
+          "responseData": "json",
+          "responseCode": 200
+        }
+      },
+      "id": "Webhook_In",
+      "name": "Webhook In",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [260, 240]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://127.0.0.1:8815/run",
+        "jsonParameters": true,
+        "options": {
+          "useQueryString": true
+        },
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "prompt",
+              "value": "={{$json.prompt || ''}}"
+            },
+            {
+              "name": "file",
+              "value": "={{$json.file || ''}}"
+            }
+          ]
+        }
+      },
+      "id": "HTTP_to_Bridge",
+      "name": "HTTP → Bridge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [540, 240]
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseData": "text"
+        }
+      },
+      "id": "Return",
+      "name": "Return",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 2,
+      "position": [800, 240]
+    }
+  ],
+  "connections": {
+    "Webhook In": { "main": [[ { "node": "HTTP → Bridge", "type": "main", "index": 0 } ]] },
+    "HTTP → Bridge": { "main": [[ { "node": "Return", "type": "main", "index": 0 } ]] }
+  },
+  "pinData": {},
+  "active": true
+}
+

@@ -6,6 +6,21 @@ import {spawnSync} from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DRY = process.argv.includes("--dry-run");
+
+// Respect CI/skips to avoid side-effects in automated environments
+const shouldSkip = () => {
+  const env = process.env;
+  if (DRY) return false; // allow explicit dry-run rendering
+  if (env.NO_POSTINSTALL === '1' || env.NO_POSTINSTALL === 'true') return true;
+  if (env.SKIP_POSTINSTALL === '1' || env.SKIP_POSTINSTALL === 'true') return true;
+  if (env.CI === '1' || (env.CI || '').toLowerCase() === 'true') return true;
+  return false;
+};
+
+if (shouldSkip()) {
+  console.log('[postinstall] skipped due to CI/NO_POSTINSTALL/SKIP_POSTINSTALL');
+  process.exit(0);
+}
 const XDG_CONFIG_HOME = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || "~", ".config");
 const XDG_STATE_HOME  = process.env.XDG_STATE_HOME  || path.join(process.env.HOME || "~", ".local/state");
 const XDG_CACHE_HOME  = process.env.XDG_CACHE_HOME  || path.join(process.env.HOME || "~", ".cache");

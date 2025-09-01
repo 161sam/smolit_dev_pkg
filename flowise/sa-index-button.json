@@ -1,0 +1,14 @@
+{
+  "id": "sa-index-button",
+  "name": "Sprachassistent Index",
+  "type": "button",
+  "action": {
+    "type": "http",
+    "method": "POST",
+    "url": "http://127.0.0.1:8815/run?file=/workspace/.openhands/index_sprachassistent.txt",
+    "response": {
+      "type": "text"
+    }
+  }
+}
+

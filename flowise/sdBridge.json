@@ -1,0 +1,26 @@
+{
+  "id": "sd-bridge-tool",
+  "name": "sdBridge",
+  "type": "tool",
+  "icon": "🔗",
+  "description": "Sende Prompts an sd-Bridge (Claude/MCP)",
+  "inputs": {
+    "url": {
+      "type": "string",
+      "default": "http://127.0.0.1:8815/run"
+    },
+    "prompt": {
+      "type": "string",
+      "default": "Hello from Flowise"
+    }
+  },
+  "action": {
+    "type": "http",
+    "method": "POST",
+    "url": "{{inputs.url}}?prompt={{inputs.prompt}}",
+    "response": {
+      "type": "text"
+    }
+  }
+}
+

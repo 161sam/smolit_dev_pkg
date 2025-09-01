@@ -3,6 +3,7 @@
 **sd** ist ein schlanker Dev-Orchestrator:  
 👉 Startet **OpenHands** (Docker), verbindet **MCP (Sequential Thinking + Memory)** und bietet eine **Claude-Bridge** per HTTP.  
 Dazu kommt eine **CLI** mit nützlichen Subcommands für Entwickler*innen und Microagent-Templates.  
+Das Paket ist außerdem eng mit dem **VoiceAssistant (va)** Projekt integriert.
 
 ---
 
@@ -56,33 +57,33 @@ sd keys init   # (optional, falls implementiert)
 Die `sd`-Pipeline verbindet Eingaben, Analyse und KI-Tools:
 
 1. **User Input (unstrukturiert)**
-   *Einfacher Text oder Datei-Inhalt.*
+   *Der/die Entwickler*in oder ein Workflow liefert einen Text oder eine Datei.\*
 
----
 2. **OpenHands (strukturierend)**
+
    * Läuft in Docker
    * Erkennt Intentionen und strukturiert unklare Eingaben
    * Baut daraus einen validierten Prompt
 
----
 3. **Claude als Supervisor**
+
    * Empfängt den strukturierten Prompt von OpenHands
    * Agiert als „Supervisor“ und orchestriert die Arbeit
    * Entscheidet, welche Tools/Aktionen erforderlich sind
 
----
 4. **Codex als Worker**
+
    * Claude beauftragt Codex (oder ein anderes Modell) mit konkreten Aufgaben
    * Codex führt Code-Analysen, Patch-Erstellung und Refactorings durch
    * Ergebnisse werden zurück in den Pipeline-Kontext gespielt
 
----
 5. **Memory (MCP)**
+
    * Erkenntnisse und Ergebnisse werden ins MCP Memory geschrieben
    * Bleiben für spätere Iterationen abrufbar
 
 Ergebnis: **Von unstrukturiertem Userinput → strukturierter Prompt → konkrete Patches & Next Steps.**
----
+
 ---
 
 ## 🖥️ CLI
@@ -100,9 +101,9 @@ sd project init    # .claude/settings.json für MCP erzeugen
 sd mcp status      # MCP-Status prüfen
 
 sd analyze         # Repo-Analyse starten
-sd index           # aktuelles Repo indexieren (Knowledge-Map)
-sd test            # Tests laufen lassen + Patches
-sd next            # nächste Schritte erzeugen
+sd va index        # VoiceAssistant indexieren (Knowledge-Map)
+sd va test         # Tests laufen lassen + Patches
+sd va next         # nächste Schritte erzeugen
 ```
 
 ---
@@ -125,14 +126,14 @@ sd next            # nächste Schritte erzeugen
 
 * Custom Tool Node: `sdBridge` (→ `http://127.0.0.1:8815/run?prompt=…`)
 * Healthcheck Node für Bridge
-* Buttons für `sd index/test/next`
+* Buttons für `va index/test/next`
 
 ### n8n
 
 * Webhook → Bridge Proxy (beliebige Prompts/Dateien)
 * Cron-Healthcheck → Memory speichern
 * GitHub Push → Repo-Analyse
-* Buttons für `sd index`, `sd test`, `sd next`
+* Buttons für VoiceAssistant (`/va/index`, `/va/test`, `/va/next`)
 
 ---
 
@@ -159,10 +160,8 @@ env.example         # Beispiel-Env
 * **CI Smoke-Test**:
 
   ```bash
-npm run ci:smoke
-```
-
-Postinstall-Schutz in CI/Headless-Umgebungen: setze `NO_POSTINSTALL=1` oder `SKIP_POSTINSTALL=1` (wird automatisch in CI beachtet).
+  npm run ci:smoke
+  ```
 * **Packaging-Test**:
 
   ```bash
@@ -202,141 +201,9 @@ rm -rf ~/.config/smolit_dev ~/.local/state/smolit_dev ~/.cache/smolit_dev
 
 ---
 
-## 🪟🍎 Windows & macOS Hinweise
-
-Diese Sektion fasst die plattformspezifischen Punkte für **sd** zusammen.
-
----
-
-### Voraussetzungen
-
-**macOS**
-- Node.js ≥ 18 (`brew install node`)
-- Docker Desktop (mit „Use gRPC FUSE“ aktiviert empfohlen)
-- (Optional) LM Studio für lokales LLM
-
-**Windows (2 Optionen)**
-1) **Native (empfohlen, wenn Git Bash vorhanden)**  
-   - Node.js ≥ 18 (Windows x64 MSI)  
-   - **Docker Desktop** (Linux-Container-Modus)  
-   - **Git for Windows** (inkl. **Git Bash**)
-2) **WSL2** (Alternative, sehr stabil)  
-   - Windows 10/11 + WSL2 + Ubuntu  
-   - Node.js + Docker Engine innerhalb von WSL2  
-   - `sd` läuft dann wie unter Linux
-
-> **Hinweis:** Der mitgelieferte **Node-Launcher** startet unter Windows automatisch die Bash (`bin/sd-launch.js`). Du kannst optional den Pfad zu Git Bash via `GIT_BASH` setzen.
-
----
-
-### Installation
-
-```bash
-# macOS / Linux
-npm install -g .
-
-# Windows (PowerShell oder CMD; nutzt Node-Launcher → Git Bash)
-npm install -g .
-```
-
-Erstcheck:
-
-```bash
-sd deps doctor
-```
-
----
-
-### Start/Stop
-
-```bash
-sd up         # OpenHands + Bridge starten, Browser öffnen
-sd status     # Health-Check
-sd stop       # Stack stoppen
-```
-
-Browser-Open:
-
-* macOS nutzt intern `open`, Linux `xdg-open`, Windows `start` (alles automatisch).
-
----
-
-### Pfade & Shell (Windows)
-
-* In **Git Bash** sind Pfade **POSIX-artig**: `C:\Users\you\repo` → `/c/Users/you/repo`
-* Das Volume-Mounting macht `sd` automatisch: `-v "$WORKSPACE:/workspace"`
-* **Tipp:** Räume Leerzeichen in Pfaden durch Anführungszeichen auf:
-
-  ```bash
-  WORKSPACE="/c/Users/you/My Project" sd up
-  ```
-
----
-
-### Docker & Networking
-
-* **Linux**: `host.docker.internal` wird von `sd` via `--add-host` gesetzt.
-* **macOS/Windows**: `host.docker.internal` ist bereits verfügbar.
-* Ports (Standard): GUI `3311`, MCP `8811/8812`, Bridge `8815`.
-
-  ```bash
-  sd ports doctor
-  ```
-
----
-
-### LLM-Konfiguration (LM Studio & Co.)
-
-* Standard: `LM_BASE_URL=http://127.0.0.1:1234/v1` (LM Studio Default)
-* Modelle anzeigen/setzen:
-
-  ```bash
-  sd llm list
-  sd llm use gpt-neoxt-20b  # Beispiel
-  ```
-* Persistent in `~/.config/smolit_dev/.env`:
-
-  ```bash
-  sd keys init
-  ```
-
----
-
-### Troubleshooting
-
-* **Port belegt?**
-
-  ```bash
-  sd ports doctor
-  ```
-* **Docker Berechtigungen (Linux):** Benutzer evtl. zur `docker` Gruppe hinzufügen:
-
-  ```bash
-  sudo usermod -aG docker $USER
-  # danach neu anmelden
-  ```
-* **Firewall-Prompt (Windows/macOS):** Beim ersten Start zulassen.
-* **LM Studio läuft nicht?** Prüfe `LM_BASE_URL`, z. B.:
-
-  ```bash
-  http://127.0.0.1:1234/v1/models
-  ```
-* **Git Bash nicht gefunden (Windows)?** Installiere **Git for Windows** oder setze `GIT_BASH`:
-
-  ```powershell
-  setx GIT_BASH "C:\Program Files\Git"
-  ```
-
----
-
-### Performance-Tipp
-
-* Für sehr große Repos/Workloads ist **WSL2** (Windows) oder **Docker Desktop mit Ressourcen-Tuning** (macOS) empfehlenswert.
-
----
-
 ## 📜 License
 
 MIT License
 
 ---
+

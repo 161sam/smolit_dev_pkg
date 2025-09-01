@@ -1,0 +1,15 @@
+{
+  "id": "sd-health",
+  "name": "sdHealth",
+  "type": "tool",
+  "description": "Check Bridge Health",
+  "action": {
+    "type": "http",
+    "method": "GET",
+    "url": "http://127.0.0.1:8815/healthz",
+    "response": {
+      "type": "text"
+    }
+  }
+}
+

@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# ==============================================================================
-#  sd  —  smolit_dev CLI
-#  One-command Dev-Stack: OpenHands (Docker) + MCP (SSE) + Claude & Codex Bridge
-#  Features:
-#    • sd up / start / stop / status / logs [-f] / ports doctor / deps {install,install-global,doctor}
-#    • sd project init / sd init / sd mcp status
-#    • sd analyze / sd index / sd test / sd next
-#    • sd keys init / sd llm {list,use <id>}
-#    • sd start-repl / sd send init "…" / sd send c "…" / sd c "…"
-#  Requirements: bash, docker, node>=18, curl (jq optional)
-#  Cross-platform: Linux, macOS; Windows via Node-Launcher + Git Bash
-# ==============================================================================
-
+# sd — One-command Dev-Stack (OpenHands + MCP + Claude-Bridge)
+# Robust CLI for starting/stopping the stack, sending prompts, and repo-centric AI helpers.
 set -Eeuo pipefail
 IFS=$'\n\t'
+
+# ===== Trap =====
+cleanup() { :; }
+trap cleanup EXIT
 
 # ===== Colors =====
 if [[ -t 1 ]]; then
@@ -26,25 +19,6 @@ warn()  { echo -e "${cYel}[sd warn]${cOff} $*" >&2; }
 die()   { echo -e "${cRed}[sd err]${cOff} $*" >&2; exit 1; }
 need()  { command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"; }
 
-# ===== Banner =====
-banner() {
-  cat <<'BANNER'
-  ____     __  __    ____     _        ___    _____        
- / ___|   |  \/  |  / __ \   | |      |_ _|  |_   _|
- \___ \   | |\/| | | |  | |  | |       | |     | |
-  ___) |  | |  | | | |__| |  | |___    | |     | |
- |____/   |_|  |_|  \____/   |_____|  |___|    |_|    _dev
-
-OpenHands + MCP + Claude & Codex Bridge
-repo helpers: analyze/index/test/next
-send/init/repl • keys/llm • ports/deps • project/init
-BANNER
-}
-
-# ===== Trap =====
-cleanup() { :; }
-trap cleanup EXIT
-
 # ===== XDG Paths =====
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -55,99 +29,31 @@ STATE_DIR="$XDG_STATE_HOME/smolit_dev"
 CACHE_DIR="$XDG_CACHE_HOME/smolit_dev"
 LOG_DIR="$STATE_DIR/logs"
 PID_DIR="$STATE_DIR/pids"
+
 mkdir -p "$CONF_DIR" "$STATE_DIR" "$CACHE_DIR" "$LOG_DIR" "$PID_DIR"
 
 ENV_FILE="${ENV_FILE:-$CONF_DIR/.env}"
 [[ -f "$ENV_FILE" ]] && set -a && . "$ENV_FILE" && set +a
 
-# ===== Core Env (overridable via .env) =====
+# ===== Core Env =====
 WORKSPACE="${WORKSPACE:-$PWD}"
-WORKSPACE_DEFAULT="${WORKSPACE_DEFAULT:-$HOME/OpenHands_Workspace}"
-
-LM_BASE_URL="${LM_BASE_URL:-http://127.0.0.1:1234/v1}"
+OH_IMAGE="${OH_IMAGE:-openhands/supergateway:latest}"
+OH_NAME="${OH_NAME:-sd_oh}"
 OH_PORT="${OH_PORT:-3311}"
 SEQ_PORT="${SEQ_PORT:-8811}"
 MEM_PORT="${MEM_PORT:-8812}"
 BRIDGE_PORT="${BRIDGE_PORT:-8815}"
-MEM_FILE="${MEM_FILE:-$HOME/.mcp/memory/memory_shared.json}"
-
-OH_IMAGE="${OH_IMAGE:-openhands/supergateway:latest}"
-OH_NAME="${OH_NAME:-sd_oh}"
+LM_BASE_URL="${LM_BASE_URL:-http://127.0.0.1:1234/v1}"
 SD_LLM_MODEL="${SD_LLM_MODEL:-}"   # optional preferred model id
 
 # Permissions / Security
-SD_BYPASS_PERMISSIONS="${SD_BYPASS_PERMISSIONS:-}"      # set non-empty to allow dangerous perms
+SD_BYPASS_PERMISSIONS="${SD_BYPASS_PERMISSIONS:-}"
 SD_ALLOWED_TOOLS="${SD_ALLOWED_TOOLS:-sequential-thinking,memory-shared,memory,codex-bridge}"
 
 # ===== Binaries =====
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_BIN="$SELF_DIR/bridge.mjs"
 POSTINSTALL_BIN="$SELF_DIR/postinstall.mjs"
-
-# Prompt Templates
-TEMPLATE_DIR="${SD_TEMPLATE_DIR:-$SELF_DIR/../templates}"
-
-# ===== OS detection & portability helpers =====
-OS_UNAME="$(uname -s 2>/dev/null || echo Unknown)"
-
-# BSD sed (macOS) braucht -i ''
-SED_INPLACE=(-i)
-if [[ "$OS_UNAME" == "Darwin" ]]; then SED_INPLACE=(-i ''); fi
-
-# realpath Fallback
-_realpath() {
-  if command -v realpath >/dev/null 2>&1; then
-    realpath "$1"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 - "$1" <<'PY'
-import os,sys; print(os.path.abspath(sys.argv[1]))
-PY
-  else
-    (
-      cd "$(dirname -- "$1")" >/dev/null 2>&1 || exit 1
-      printf '%s/%s\n' "${PWD}" "$(basename -- "$1")"
-    )
-  fi
-}
-
-# open URL cross-platform
-_open_url() {
-  local url="$1"
-  if command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$url" >/dev/null 2>&1 || true
-  elif [[ "$OS_UNAME" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
-    open "$url" >/dev/null 2>&1 || true
-  elif command -v cmd.exe >/dev/null 2>&1; then
-    cmd.exe /c start "" "$url" >/dev/null 2>&1 || true
-  else
-    echo "Open: $url"
-  fi
-}
-
-# Ports: lsof -> ss -> netstat Fallback
-_port_in_use() {
-  local port="$1"
-  if command -v lsof >/dev/null 2>&1; then
-    lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
-  elif command -v ss >/dev/null 2>&1; then
-    ss -lntH "( sport = :$port )" 2>/dev/null | grep -q .
-  elif command -v netstat >/dev/null 2>&1; then
-    netstat -an 2>/dev/null | grep -E "[\.\:]$port[[:space:]]" | grep -qi LISTEN
-  else
-    return 1
-  fi
-}
-
-_port_info() {
-  local port="$1"
-  if command -v lsof >/dev/null 2>&1; then
-    lsof -iTCP:"$port" -sTCP:LISTEN | awk 'NR==1 || NR==2'
-  elif command -v ss >/dev/null 2>&1; then
-    ss -lntp "( sport = :$port )" 2>/dev/null | sed -n '1,2p'
-  elif command -v netstat >/dev/null 2>&1; then
-    netstat -an 2>/dev/null | grep -E "[\.\:]$port[[:space:]]" | sed -n '1,2p'
-  fi
-}
 
 # ===== Helpers =====
 pidfile() { echo "$PID_DIR/$1.pid"; }
@@ -160,11 +66,12 @@ require_node18() {
 }
 
 write_env_kv() {
+  # idempotent key=val writer into $ENV_FILE
   local key="$1" val="$2"
-  mkdir -p "$(dirname "$ENV_FILE")"; touch "$ENV_FILE"
+  mkdir -p "$(dirname "$ENV_FILE")"
+  touch "$ENV_FILE"
   if grep -qE "^${key}=" "$ENV_FILE"; then
-    local esc="${val//\//\\/}"
-    sed "${SED_INPLACE[@]}" "s|^${key}=.*|${key}=${esc}|" "$ENV_FILE"
+    sed -i "s|^${key}=.*|${key}=${val//|/\\|}|" "$ENV_FILE"
   else
     printf "%s=%s\n" "$key" "$val" >> "$ENV_FILE"
   fi
@@ -172,46 +79,10 @@ write_env_kv() {
 
 ensure_oh_dirs() { mkdir -p "$WORKSPACE/.openhands"; }
 
-tail_logs() {
-  echo "Logs in: $LOG_DIR"
-  echo "Docker logs ($OH_NAME) und bridge.log folgen (Ctrl-C beendet)…"
-  { docker logs -f "$OH_NAME" 2>&1 & echo $! >"$(pidfile dockerlogs)"; } || true
-  tail -n 200 -F "$LOG_DIR/bridge.log" || true
-  kill "$(cat "$(pidfile dockerlogs)" 2>/dev/null)" 2>/dev/null || true
-  rm -f "$(pidfile dockerlogs)" || true
-}
-
-# == In bin/sd: Unter den Portability Helpers ergänzen ==
-_escape_sed() { printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'; }
-
-_render_template() {
-  # _render_template <template-name> <dest-file>
-  local name="$1"; local dest="$2"
-  local src="$TEMPLATE_DIR/$name"
-  mkdir -p "$(dirname "$dest")"
-  if [[ ! -f "$src" ]]; then
-    # Fallback-Minis, falls Template fehlt (keine Inline-Großprompts mehr)
-    echo "# ${name%.*} — {{PROJECT}} @ {{DATE_ISO}}" > "$dest"
-  else
-    cp "$src" "$dest"
-  fi
-  local proj="$(basename "$WORKSPACE")"
-  local now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  # Platzhalter ersetzen (BSD/macOS-kompatibel via SED_INPLACE)
-  local w_esc="$(_escape_sed "$WORKSPACE")"
-  local l_esc="$(_escape_sed "$LM_BASE_URL")"
-  sed "${SED_INPLACE[@]}" \
-    -e "s|{{PROJECT}}|$proj|g" \
-    -e "s|{{WORKSPACE}}|$w_esc|g" \
-    -e "s|{{LM_BASE_URL}}|$l_esc|g" \
-    -e "s|{{DATE_ISO}}|$now|g" \
-    "$dest"
-}
-
 # ===== Bridge =====
 start_bridge() {
   require_node18
-  if _port_in_use "$BRIDGE_PORT"; then
+  if lsof -iTCP:"$BRIDGE_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     warn "Bridge-Port $BRIDGE_PORT bereits belegt – überspringe Start."
     return 0
   fi
@@ -225,7 +96,7 @@ start_bridge() {
     >>"$LOG_DIR/bridge.log" 2>&1 &
   echo $! >"$(pidfile bridge)"
   for _ in {1..20}; do
-    sleep 0.25
+    sleep 0.2
     curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1 && break || true
   done
 }
@@ -245,10 +116,6 @@ start_openhands() {
     warn "OpenHands Container '$OH_NAME' läuft bereits."
     return 0
   fi
-  if ! curl -fsS -m 1 "$LM_BASE_URL/models" >/dev/null 2>&1; then
-    warn "LM_BASE_URL ($LM_BASE_URL) konnte nicht geprüft werden – fahre fort."
-  fi
-
   log "Starte OpenHands ($OH_IMAGE) auf Ports GUI:$OH_PORT SEQ:$SEQ_PORT MEM:$MEM_PORT …"
   docker run -d --rm \
     --name "$OH_NAME" \
@@ -258,7 +125,6 @@ start_openhands() {
     -v "$WORKSPACE:/workspace" \
     "$OH_IMAGE" \
     >/dev/null
-
   for _ in {1..40}; do
     sleep 0.25
     curl -fsS "http://127.0.0.1:$OH_PORT" >/dev/null 2>&1 && break || true
@@ -274,13 +140,12 @@ stop_openhands() {
 
 open_browser() {
   local url="http://127.0.0.1:$OH_PORT"
-  _open_url "$url"
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 || true; fi
   echo "GUI: $url"
 }
 
 # ===== Diagnostics =====
 health() {
-  banner
   local ok=0
   for url in \
     "http://127.0.0.1:$OH_PORT" \
@@ -301,9 +166,9 @@ health() {
 ports_doctor() {
   echo "Port-Check:"
   for p in "$OH_PORT" "$SEQ_PORT" "$MEM_PORT" "$BRIDGE_PORT"; do
-    if _port_in_use "$p"; then
+    if lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
       echo "  ✗ Port $p belegt:"
-      _port_info "$p"
+      lsof -iTCP:"$p" -sTCP:LISTEN | awk 'NR==1 || NR==2'
     else
       echo "  ✓ Port $p frei"
     fi
@@ -312,7 +177,7 @@ ports_doctor() {
 
 deps_doctor() {
   echo "Dependencies:"
-  for b in node npm docker npx curl; do
+  for b in docker node npm curl; do
     if command -v "$b" >/dev/null 2>&1; then
       echo "  ✓ $b: $(command -v "$b")"
     else
@@ -356,13 +221,6 @@ mcp_status() {
   fi
 }
 
-cmd_init_repo() {
-  project_init
-  ensure_oh_dirs
-  [[ -f "$WORKSPACE/.openhands/index_repo.txt" ]] || : > "$WORKSPACE/.openhands/index_repo.txt"
-  log "Repo initialisiert: .claude/settings.json & .openhands/"
-}
-
 # ===== Keys & LLM =====
 keys_init() {
   mkdir -p "$(dirname "$ENV_FILE")"
@@ -380,10 +238,11 @@ llm_list() {
   echo "Modelle von ${url}:"
   if command -v jq >/dev/null 2>&1; then
     curl -fsS "$url" | jq -r '
-      (if type=="object" and has("data") then .data else . end)
-      | (..|objects|select(has("id"))|.id)' | sort -u
+      (..|objects|select(has("id"))|.id) as $ids
+      | (if type=="object" and has("data") then .data else . end)
+      | (..|objects|select(has("id"))|.id) ' | sort -u
   else
-    curl -fsS "$url" || true
+    curl -fsS "$url" | tr -d '\n' | sed 's/"/\n/g' | grep -E '^[^[:space:]]+:[^[:space:]]+$' -m 0 || true
   fi
 }
 
@@ -398,32 +257,59 @@ llm_use() {
 send_to_bridge_file() {
   local file="$1"
   [[ -f "$file" ]] || die "Datei nicht gefunden: $file"
-  curl -fsS --get "http://127.0.0.1:$BRIDGE_PORT/run" \
-    --data-urlencode "file=/workspace${file#"$WORKSPACE"}" \
+  curl -fsS "http://127.0.0.1:$BRIDGE_PORT/run" \
+    --get --data-urlencode "file=/workspace${file#"$WORKSPACE"}" \
     || die "Bridge-Aufruf fehlgeschlagen."
 }
 
 send_to_bridge_prompt() {
   local prompt="$1"
   [[ -n "${prompt:-}" ]] || die "Leerer Prompt."
-  curl -fsS --get "http://127.0.0.1:$BRIDGE_PORT/run" \
-    --data-urlencode "prompt=$prompt" \
+  curl -fsS "http://127.0.0.1:$BRIDGE_PORT/run" \
+    --get --data-urlencode "prompt=$prompt" \
     || die "Bridge-Aufruf fehlgeschlagen."
 }
 
-# ===== Repo Helpers =====
+# ===== High-level Commands =====
 analyze() {
   ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/analyze_prompt.md"
-  _render_template "analyze.md" "$f"
+  local f="$WORKSPACE/.openhands/init_prompt.txt"
+  if [[ ! -f "$f" ]]; then
+    cat >"$f" <<'MD'
+# GOAL
+Analysiere das gesamte Repository (Code+Docs), identifiziere Probleme, TODOs, Sicherheits-/Robustheits-Punkte und erstelle eine priorisierte Aktionsliste mit konkreten Patches.
+
+# CONTEXT
+- Projekt: smolit_dev (sd) — OpenHands + MCP (SSE) + Claude Bridge
+- Environment: Node>=18, Docker, LM_BASE_URL für Offline-LLMs
+
+# DELIVERABLES
+1) Kurzfazit & Risiken
+2) Konkrete Patches (copy&paste) für CLI/Bridge/Postinstall
+3) Follow-up Plan für CI, Flowise, n8n
+
+# OUTPUT
+- Sei präzise, generiere nur überprüfbaren Code.
+MD
+  fi
   start_bridge
   send_to_bridge_file "$f"
 }
 
 cmd_index() {
   ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/index_repo.md"
-  _render_template "index.md" "$f"
+  local f="$WORKSPACE/.openhands/index_repo.txt"
+  cat >"$f" <<'MD'
+# TASK
+Lies Code & Struktur des aktuellen Repos.
+- Erzeuge eine Knowledge-Map (Module, Pfade, Haupt-Funktionen, Datenflüsse)
+- Liste offene TODOs/Fehler inkl. Fundstellen
+- Eigne dich als kurzer README-Abschnitt
+
+# OUTPUT
+<KNOWLEDGE_MAP>…</KNOWLEDGE_MAP>
+<TODOS>…</TODOS>
+MD
   start_bridge
   send_to_bridge_file "$f"
 }
@@ -431,30 +317,55 @@ cmd_index() {
 cmd_test() {
   ensure_oh_dirs
   ( cd "$WORKSPACE" && if command -v pytest >/dev/null 2>&1; then pytest -q | tee ".openhands/test_report.txt"; else echo "pytest nicht installiert" | tee ".openhands/test_report.txt"; fi )
-  local f="$WORKSPACE/.openhands/test_prompt.md"
-  _render_template "test.md" "$f"
+  local f="$WORKSPACE/.openhands/test_prompt.txt"
+  cat >"$f" <<'MD'
+# TASK
+Analysiere die Testausgabe in /workspace/.openhands/test_report.txt.
+- Fasse Fehlerursachen zusammen
+- Erzeuge geordnete Fix-Vorschläge mit minimal-invasiven Patches (copy&paste)
+
+# OUTPUT
+<TEST_SUMMARY>…</TEST_SUMMARY>
+<PATCHES>…</PATCHES>
+MD
   start_bridge
   send_to_bridge_file "$f"
 }
 
 cmd_next() {
   ensure_oh_dirs
-  local f="$WORKSPACE/.openhands/next_steps.md"
-  _render_template "next.md" "$f"
+  local f="$WORKSPACE/.openhands/next_steps.txt"
+  cat >"$f" <<'MD'
+# TASK
+Erzeuge konkrete Next-Steps basierend auf aktuellem Wissensstand (Memory & letzte Antworten):
+- 5–10 Aufgaben in Reihenfolge
+- Je Aufgabe: Ziel, betroffene Dateien, Kurz-Patch/Command
+
+# OUTPUT
+<NEXT_STEPS>…</NEXT_STEPS>
+MD
   start_bridge
   send_to_bridge_file "$f"
 }
 
-# ===== REPL / Send Shortcuts =====
+# ===== Convenience / Shortcuts =====
+cmd_init_repo() {
+  # umbrella init for a fresh repo workspace
+  project_init
+  ensure_oh_dirs
+  [[ -f "$WORKSPACE/.openhands/index_repo.txt" ]] || : > "$WORKSPACE/.openhands/index_repo.txt"
+  log "Repo initialisiert: .claude/settings.json & .openhands/"
+}
+
 start_repl() {
   start_bridge
   echo "sd REPL — sende Zeilen an Bridge. Befehle: :quit, :help, :file <path>"
   while IFS= read -r -e line; do
     case "$line" in
       ":quit"|":q") break ;;
-      ":help") echo ":file <path> — sendet Dateiinhalt /workspace-relativ"; continue ;;
+      ":help") echo ":file <path> — sendet Dateiinhalt /workspace relativ"; continue ;;
       ":file "*) f="${line#:file }"; [[ -f "$f" ]] || { echo "Datei fehlt: $f"; continue; }
-                 send_to_bridge_file "$(_realpath "$f")"; continue ;;
+                 send_to_bridge_file "$(realpath "$f")"; continue ;;
       "") continue ;;
       *) send_to_bridge_prompt "$line" ;;
     esac
@@ -478,16 +389,14 @@ send_change() {
 # ===== Usage =====
 usage() {
   cat <<USAGE
-$(banner)
+sd — One-command Dev-Stack (OpenHands + MCP + Bridge)
+
 Usage:
   sd up               # Stack im Hintergrund + Browser öffnen (GUI)
-  sd start            # Stack starten & Logs im Vordergrund folgen
+  sd start            # Stack starten (ohne Browser)
   sd stop             # Stack stoppen (Bridge + OpenHands)
   sd status           # Health-Checks
   sd logs             # Log-Verzeichnis anzeigen
-  sd logs -f          # Logs folgen (Bridge + Docker)
-  sd deps install     # Hinweise / lokale Setup-Infos
-  sd deps install-global   # optionale globale CLIs installieren
   sd deps doctor      # Dependency-Check
   sd ports doctor     # Port-Check
 
@@ -505,8 +414,8 @@ Usage:
   sd llm use <id>     # bevorzugtes Modell merken (SD_LLM_MODEL)
 
   sd start-repl       # interaktive Session (GUI parallel nutzbar)
-  sd send init "…"    # Initial-/Ziel-Prompt senden
-  sd send c    "…"    # Änderungs-/Follow-up-Prompt senden
+  sd send init "…"    # einen Initial-/Ziel-Prompt an Bridge senden
+  sd send c    "…"    # einen Änderungs-/Follow-up-Prompt senden
   sd c "…"            # Kurzform für 'sd send c …'
 
 Env:
@@ -520,23 +429,11 @@ USAGE
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   up)            start_openhands; start_bridge; open_browser ;;
-  start)         start_openhands; start_bridge; tail_logs ;;
+  start)         start_openhands; start_bridge ;;
   stop)          stop_bridge; stop_openhands ;;
   status)        health || true ;;
-  logs)          if [[ "${1:-}" == "-f" ]]; then tail_logs; else echo "$LOG_DIR"; fi ;;
-  deps)          sub="${1:-}"; shift || true;
-                 case "${sub:-}" in
-                   install)
-                     echo "[sd] Lokale CLI-Dependencies werden über dieses Paket bereitgestellt."
-                     echo "[sd] Optionale globale CLI:"
-                     echo "     npm i -g @anthropic-ai/claude-code"
-                     ;;
-                   install-global)
-                     npm i -g @anthropic-ai/claude-code
-                     ;;
-                   doctor) deps_doctor ;;
-                   *) echo "Usage: sd deps {install|install-global|doctor}"; exit 2;;
-                 esac ;;
+  logs)          echo "$LOG_DIR" ;;
+  deps)          sub="${1:-}"; shift || true; [[ "${sub:-}" == "doctor" ]] && deps_doctor || usage ;;
   ports)         sub="${1:-}"; shift || true; [[ "${sub:-}" == "doctor" ]] && ports_doctor || usage ;;
   project)       sub="${1:-}"; shift || true; [[ "${sub:-}" == "init" ]] && project_init || usage ;;
   init)          cmd_init_repo ;;
