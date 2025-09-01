@@ -149,29 +149,6 @@ env.example         # Beispiel-Env
 
 ---
 
-## 🧑‍💻 Developer Guide
-
-* **Linting**:
-
-  ```bash
-  npm run lint:shell
-  npm run lint:node
-  ```
-* **CI Smoke-Test**:
-
-  ```bash
-npm run ci:smoke
-```
-
-Postinstall-Schutz in CI/Headless-Umgebungen: setze `NO_POSTINSTALL=1` oder `SKIP_POSTINSTALL=1` (wird automatisch in CI beachtet).
-* **Packaging-Test**:
-
-  ```bash
-  npm pack
-  ```
-
----
-
 ## 📖 User Handbook
 
 ### Starten
@@ -246,6 +223,30 @@ curl -sSf http://127.0.0.1:8815/healthz  # Bridge
 npm uninstall -g .
 rm -rf ~/.config/smolit_dev ~/.local/state/smolit_dev ~/.cache/smolit_dev
 ```
+
+---
+
+## 🧑‍💻 Developer Guide
+
+* **Linting**:
+
+  ```bash
+  npm run lint:shell
+  npm run lint:node
+  ```
+* **CI Smoke-Test**:
+
+  ```bash
+  npm run ci:smoke
+  ```
+
+Postinstall-Schutz in CI/Headless-Umgebungen: setze `NO_POSTINSTALL=1` oder `SKIP_POSTINSTALL=1` (wird automatisch in CI beachtet).
+
+* **Packaging-Test**:
+
+  ```bash
+  npm pack
+  ```
 
 ---
 
