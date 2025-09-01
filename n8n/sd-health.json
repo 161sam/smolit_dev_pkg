@@ -1,0 +1,102 @@
+{
+  "name": "sd-health",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "Cron",
+      "name": "Cron (alle 5 Minuten)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 260]
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:3311",
+        "options": {}
+      },
+      "id": "OH",
+      "name": "OH GUI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 120]
+    },
+    {
+      "parameters": { "url": "http://127.0.0.1:8811/healthz" },
+      "id": "SEQ",
+      "name": "Sequential (8811)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 220]
+    },
+    {
+      "parameters": { "url": "http://127.0.0.1:8812/healthz" },
+      "id": "MEM",
+      "name": "Memory (8812)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 320]
+    },
+    {
+      "parameters": { "url": "http://127.0.0.1:8815/healthz" },
+      "id": "BRIDGE",
+      "name": "Bridge (8815)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 420]
+    },
+    {
+      "parameters": {
+        "functionCode": "const ok = (r)=> r.statusCode>=200 && r.statusCode<400;\nreturn [{\n  json: {\n    timestamp: new Date().toISOString(),\n    status: {\n      openhands: ok(items[0].json) ? 'up' : 'down',\n      sequential: ok(items[1].json) ? 'up' : 'down',\n      memory: ok(items[2].json) ? 'up' : 'down',\n      bridge: ok(items[3].json) ? 'up' : 'down'\n    }\n  }\n}];"
+      },
+      "id": "Aggregate",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [780, 270]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://127.0.0.1:8815/run",
+        "options": { "useQueryString": true },
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "prompt",
+              "value": "={{`# Healthcheck\\nTimestamp: ${$json.timestamp}\\nOpenHands: ${$json.status.openhands}\\nSequential: ${$json.status.sequential}\\nMemory: ${$json.status.memory}\\nBridge: ${$json.status.bridge}\\n\\nBitte speichere diese Beobachtung im Memory (namespace: sd/health).`}}"
+            }
+          ]
+        }
+      },
+      "id": "Send_to_Bridge",
+      "name": "→ Bridge (persist)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1040, 270]
+    }
+  ],
+  "connections": {
+    "Cron (alle 5 Minuten)": { "main": [[
+      { "node": "OH", "type": "main", "index": 0 },
+      { "node": "SEQ", "type": "main", "index": 0 },
+      { "node": "MEM", "type": "main", "index": 0 },
+      { "node": "BRIDGE", "type": "main", "index": 0 }
+    ]]},
+    "OH": { "main": [[ { "node": "Aggregate", "type": "main", "index": 0 } ]] },
+    "SEQ": { "main": [[ { "node": "Aggregate", "type": "main", "index": 1 } ]] },
+    "MEM": { "main": [[ { "node": "Aggregate", "type": "main", "index": 2 } ]] },
+    "BRIDGE": { "main": [[ { "node": "Aggregate", "type": "main", "index": 3 } ]] },
+    "Aggregate": { "main": [[ { "node": "→ Bridge (persist)", "type": "main", "index": 0 } ]] }
+  },
+  "pinData": {},
+  "active": true
+}
+

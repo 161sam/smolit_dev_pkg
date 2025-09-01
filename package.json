@@ -5,24 +5,30 @@
   "type": "module",
   "license": "MIT",
   "bin": {
-    "sd": "./bin/sd"
+    "sd": "bin/sd-launch.cjs"
   },
   "files": [
-    "bin/",
+    "bin/sd",
+    "bin/sd-launch.cjs",
+    "bin/bridge.mjs",
+    "bin/postinstall.mjs",
     "templates/",
     "env.example",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "prepack": "chmod +x bin/sd bin/bridge.mjs bin/postinstall.mjs",
+    "prepack": "chmod +x bin/sd bin/bridge.mjs bin/postinstall.mjs bin/sd-launch.cjs",
     "postinstall": "node ./bin/postinstall.mjs",
+    "lint": "eslint .",
+    "format": "prettier -w .",
+    "format:check": "prettier -c .",
     "lint:shell": "command -v shellcheck >/dev/null 2>&1 && shellcheck bin/sd || echo 'shellcheck not installed'",
-    "lint:node": "node -e \"console.log('node', process.version)\"",
-    "ci:smoke": "node ./bin/postinstall.mjs --dry-run && node -e \"console.log('bridge ok')\" && ./bin/sd --help || true"
+    "test": "node tests/run-tests.mjs",
+    "ci:smoke": "node ./bin/postinstall.mjs --dry-run && ./bin/sd --help || true"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.18"
   },
   "keywords": [
     "openhands",
@@ -40,4 +46,10 @@
   },
   "homepage": "https://github.com/161sam/smolit_dev_pkg#readme",
   "preferGlobal": true
+  ,
+  "devDependencies": {
+    "@eslint/js": "^9.8.0",
+    "eslint": "^9.8.0",
+    "prettier": "^3.3.3"
+  }
 }

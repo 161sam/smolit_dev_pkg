@@ -1,0 +1,115 @@
+{
+  "name": "sa-buttons",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "GET", "path": "sa/index" },
+      "id": "W1",
+      "name": "Webhook /sa/index",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 120]
+    },
+    {
+      "parameters": { "httpMethod": "GET", "path": "sa/test" },
+      "id": "W2",
+      "name": "Webhook /sa/test",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 240]
+    },
+    {
+      "parameters": { "httpMethod": "GET", "path": "sa/next" },
+      "id": "W3",
+      "name": "Webhook /sa/next",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 360]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://127.0.0.1:8815/run",
+        "options": { "useQueryString": true },
+        "queryParametersUi": {
+          "parameter": [
+            { "name": "file", "value": "/workspace/.openhands/index_sprachassistent.txt" }
+          ]
+        }
+      },
+      "id": "HTTP1",
+      "name": "→ Bridge (index)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 120]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://127.0.0.1:8815/run",
+        "options": { "useQueryString": true },
+        "queryParametersUi": {
+          "parameter": [
+            { "name": "prompt", "value": "# TASK\\nAnalysiere die Testausgabe in /workspace/.openhands/test_report.txt.\\n- Fasse Fehlerursachen zusammen\\n- Erzeuge geordnete Fix-Vorschläge mit minimal-invasiven Patches\\n# OUTPUT\\n<TEST_SUMMARY>…</TEST_SUMMARY>\\n<PATCHES>…</PATCHES>" }
+          ]
+        }
+      },
+      "id": "HTTP2",
+      "name": "→ Bridge (test)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 240]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://127.0.0.1:8815/run",
+        "options": { "useQueryString": true },
+        "queryParametersUi": {
+          "parameter": [
+            { "name": "prompt", "value": "# TASK\\nErzeuge aus vorhandenem Wissensstand konkrete Next-Steps (5–10): Ziel, betroffene Dateien, Kurz-Patch/Command.\\n# OUTPUT\\n<NEXT_STEPS>…</NEXT_STEPS>" }
+          ]
+        }
+      },
+      "id": "HTTP3",
+      "name": "→ Bridge (next)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 360]
+    },
+    {
+      "parameters": { "options": { "responseData": "text" } },
+      "id": "R1",
+      "name": "Return 1",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 2,
+      "position": [780, 120]
+    },
+    {
+      "parameters": { "options": { "responseData": "text" } },
+      "id": "R2",
+      "name": "Return 2",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 2,
+      "position": [780, 240]
+    },
+    {
+      "parameters": { "options": { "responseData": "text" } },
+      "id": "R3",
+      "name": "Return 3",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 2,
+      "position": [780, 360]
+    }
+  ],
+  "connections": {
+    "Webhook /sa/index": { "main": [[ { "node": "→ Bridge (index)", "type": "main", "index": 0 } ]] },
+    "Webhook /sa/test":  { "main": [[ { "node": "→ Bridge (test)",  "type": "main", "index": 0 } ]] },
+    "Webhook /sa/next":  { "main": [[ { "node": "→ Bridge (next)",  "type": "main", "index": 0 } ]] },
+    "→ Bridge (index)": { "main": [[ { "node": "Return 1", "type": "main", "index": 0 } ]] },
+    "→ Bridge (test)":  { "main": [[ { "node": "Return 2", "type": "main", "index": 0 } ]] },
+    "→ Bridge (next)":  { "main": [[ { "node": "Return 3", "type": "main", "index": 0 } ]] }
+  },
+  "pinData": {},
+  "active": true
+}
+

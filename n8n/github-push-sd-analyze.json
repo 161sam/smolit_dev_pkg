@@ -1,0 +1,68 @@
+{
+  "name": "github-push-sd-analyze",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github/sd/analyze",
+        "options": {
+          "responseData": "json",
+          "responseCode": 200
+        }
+      },
+      "id": "Webhook_GH",
+      "name": "Webhook GitHub (push)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [220, 240]
+    },
+    {
+      "parameters": {
+        "functionCode": "const repo = $json.repository?.full_name || 'unknown';\nconst branch = ($json.ref||'').split('/').slice(2).join('/') || 'unknown';\nconst commits = ($json.commits||[]).map(c=>`- ${c.id.slice(0,7)} ${c.message.replace(/\\n/g,' ')} (${c.author?.name||''})`).join('\\n');\nconst summary = `Repo: ${repo}\\nBranch: ${branch}\\nCommits:\\n${commits}`;\nreturn [{ json: { prompt: `# Analyze Push\\n${summary}\\n\\nLiefere kurze Impact-Analyse, potentielle Risiken und konkrete next steps (mit Datei-Hinweisen).` } }];"
+      },
+      "id": "ComposePrompt",
+      "name": "Compose Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [500, 240]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://127.0.0.1:8815/run",
+        "options": { "useQueryString": true },
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "prompt",
+              "value": "={{$json.prompt}}"
+            }
+          ]
+        }
+      },
+      "id": "HTTP_to_Bridge",
+      "name": "→ Bridge (analyze)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [760, 240]
+    },
+    {
+      "parameters": {
+        "options": { "responseData": "text" }
+      },
+      "id": "Return",
+      "name": "Return",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 2,
+      "position": [1020, 240]
+    }
+  ],
+  "connections": {
+    "Webhook GitHub (push)": { "main": [[ { "node": "Compose Prompt", "type": "main", "index": 0 } ]] },
+    "Compose Prompt": { "main": [[ { "node": "→ Bridge (analyze)", "type": "main", "index": 0 } ]] },
+    "→ Bridge (analyze)": { "main": [[ { "node": "Return", "type": "main", "index": 0 } ]] }
+  },
+  "pinData": {},
+  "active": true
+}
+

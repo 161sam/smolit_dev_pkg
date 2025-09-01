@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# sd — One-command Dev-Stack (OpenHands + MCP + Claude-Bridge)
+# Robust CLI for starting/stopping the stack and running repo-centric AI helpers.
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# ===== Trap & Strictness =====
+cleanup() {
+  # nothing persistent to clean; placeholder for future temp-files
+  :
+}
+trap cleanup EXIT
+
+# ===== Colors (fallback if not TTY) =====
+if [[ -t 1 ]]; then
+  cCyan=$'\e[36m'; cYel=$'\e[33m'; cRed=$'\e[31m'; cDim=$'\e[2m'; cOff=$'\e[0m'
+else
+  cCyan=""; cYel=""; cRed=""; cDim=""; cOff=""
+fi
+
+log()   { echo -e "${cCyan}[sd]${cOff} $*"; }
+warn()  { echo -e "${cYel}[sd warn]${cOff} $*" >&2; }
+die()   { echo -e "${cRed}[sd err]${cOff} $*" >&2; exit 1; }
+need()  { command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"; }
+
+# ===== Defaults & XDG Paths =====
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+
+CONF_DIR="$XDG_CONFIG_HOME/smolit_dev"
+STATE_DIR="$XDG_STATE_HOME/smolit_dev"
+CACHE_DIR="$XDG_CACHE_HOME/smolit_dev"
+LOG_DIR="$STATE_DIR/logs"
+PID_DIR="$STATE_DIR/pids"
+
+mkdir -p "$CONF_DIR" "$STATE_DIR" "$CACHE_DIR" "$LOG_DIR" "$PID_DIR"
+
+ENV_FILE="${ENV_FILE:-$CONF_DIR/.env}"
+[[ -f "$ENV_FILE" ]] && set -a && . "$ENV_FILE" && set +a
+
+# ===== Core Env =====
+WORKSPACE="${WORKSPACE:-$PWD}"
+OH_IMAGE="${OH_IMAGE:-openhands/supergateway:latest}"
+OH_NAME="${OH_NAME:-sd_oh}"
+OH_PORT="${OH_PORT:-3311}"
+SEQ_PORT="${SEQ_PORT:-8811}"
+MEM_PORT="${MEM_PORT:-8812}"
+BRIDGE_PORT="${BRIDGE_PORT:-8815}"
+LM_BASE_URL="${LM_BASE_URL:-http://127.0.0.1:1234/v1}"
+
+# Permissions / Security
+SD_BYPASS_PERMISSIONS="${SD_BYPASS_PERMISSIONS:-}"
+SD_ALLOWED_TOOLS="${SD_ALLOWED_TOOLS:-sequential-thinking,memory-shared,memory,codex-bridge}"
+
+# ===== Binaries =====
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BRIDGE_BIN="$SELF_DIR/bridge.mjs"
+POSTINSTALL_BIN="$SELF_DIR/postinstall.mjs"
+
+# ===== Helpers =====
+pidfile() { echo "$PID_DIR/$1.pid"; }
+is_running() { [[ -f "$(pidfile "$1")" ]] && kill -0 "$(cat "$(pidfile "$1")")" 2>/dev/null; }
+require_node18() {
+  need node
+  local v
+  v="$(node -v | sed 's/^v//;s/\..*$//')" || true
+  if [[ "${v:-0}" -lt 18 ]]; then
+    warn "Node >= 18 empfohlen (gefunden: $(node -v))."
+  fi
+}
+
+# ===== Bridge =====
+start_bridge() {
+  require_node18
+  if lsof -iTCP:"$BRIDGE_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    warn "Bridge-Port $BRIDGE_PORT bereits belegt – überspringe Start."
+    return 0
+  fi
+  [[ -f "$BRIDGE_BIN" ]] || die "bridge.mjs nicht gefunden: $BRIDGE_BIN"
+  log "Starte Bridge auf Port $BRIDGE_PORT (WORKSPACE=$WORKSPACE)…"
+  nohup node "$BRIDGE_BIN" \
+    --port "$BRIDGE_PORT" \
+    --workspace "$WORKSPACE" \
+    --allowed-tools "$SD_ALLOWED_TOOLS" \
+    $( [[ -n "$SD_BYPASS_PERMISSIONS" ]] && echo "--dangerously-skip-permissions" ) \
+    >>"$LOG_DIR/bridge.log" 2>&1 &
+
+  echo $! >"$(pidfile bridge)"
+  # Warmup
+  for _ in {1..10}; do
+    sleep 0.25
+    if curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1; then
+      log "Bridge bereit: http://127.0.0.1:$BRIDGE_PORT/healthz"
+      return 0
+    fi
+  done
+  warn "Bridge healthz nicht erreichbar (noch bootend?)"
+}
+
+stop_bridge() {
+  if is_running bridge; then
+    log "Stoppe Bridge (PID $(cat "$(pidfile bridge)") )…"
+    kill "$(cat "$(pidfile bridge)")" 2>/dev/null || true
+    rm -f "$(pidfile bridge)"
+  fi
+}
+
+# ===== OpenHands =====
+start_openhands() {
+  need docker
+  if docker ps --format '{{.Names}}' | grep -q "^${OH_NAME}\$"; then
+    warn "OpenHands Container '$OH_NAME' läuft bereits."
+    return 0
+  fi
+  # Validate LM_BASE_URL briefly (non-fatal)
+  if ! curl -fsS -m 1 "$LM_BASE_URL/models" >/dev/null 2>&1; then
+    warn "LM_BASE_URL ($LM_BASE_URL) konnte nicht geprüft werden – fahre fort."
+  fi
+
+  log "Starte OpenHands ($OH_IMAGE) auf Ports GUI:$OH_PORT SEQ:$SEQ_PORT MEM:$MEM_PORT …"
+  docker run -d --rm \
+    --name "$OH_NAME" \
+    --add-host host.docker.internal:host-gateway \
+    -p "$OH_PORT:3311" -p "$SEQ_PORT:8811" -p "$MEM_PORT:8812" \
+    -e LM_BASE_URL="$LM_BASE_URL" \
+    -v "$WORKSPACE:/workspace" \
+    "$OH_IMAGE" \
+    >/dev/null
+
+  # Warmup ping
+  for _ in {1..20}; do
+    sleep 0.25
+    curl -fsS "http://127.0.0.1:$OH_PORT" >/dev/null 2>&1 && break || true
+  done
+}
+
+stop_openhands() {
+  if docker ps --format '{{.Names}}' | grep -q "^${OH_NAME}\$"; then
+    log "Stoppe OpenHands Container '$OH_NAME' …"
+    docker rm -f "$OH_NAME" >/dev/null || true
+  fi
+}
+
+open_browser() {
+  local url="http://127.0.0.1:$OH_PORT"
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 || true; fi
+  echo "GUI: $url"
+}
+
+# ===== Diagnostics =====
+health() {
+  local ok=0
+  for url in \
+    "http://127.0.0.1:$OH_PORT" \
+    "http://127.0.0.1:$SEQ_PORT/healthz" \
+    "http://127.0.0.1:$MEM_PORT/healthz" \
+    "http://127.0.0.1:$BRIDGE_PORT/healthz"
+  do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      echo -e "  ✓ $url"
+      ok=$((ok+1))
+    else
+      echo -e "  ✗ $url"
+    fi
+  done
+  [[ $ok -ge 1 ]] || return 1
+}
+
+ports_doctor() {
+  echo "Port-Check:"
+  for p in "$OH_PORT" "$SEQ_PORT" "$MEM_PORT" "$BRIDGE_PORT"; do
+    if lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "  ✗ Port $p belegt:"
+      lsof -iTCP:"$p" -sTCP:LISTEN | awk 'NR==1 || NR==2'
+    else
+      echo "  ✓ Port $p frei"
+    fi
+  done
+}
+
+deps_doctor() {
+  echo "Dependencies:"
+  for b in docker node npm curl; do
+    if command -v "$b" >/dev/null 2>&1; then
+      echo "  ✓ $b: $(command -v "$b")"
+    else
+      echo "  ✗ $b fehlt"
+    fi
+  done
+  # Docker group hint
+  if ! groups | grep -q '\bdocker\b'; then
+    echo "  ${cDim}Hinweis:${cOff} Benutzer nicht in 'docker' Gruppe – evtl. 'sudo usermod -aG docker $USER' und neu anmelden."
+  end
+}
+
+# ===== MCP / Project =====
+project_init() {
+  local cfg="$WORKSPACE/.claude/settings.json"
+  mkdir -p "$WORKSPACE/.claude"
+  if [[ -f "$cfg" ]]; then
+    log "Settings vorhanden: $cfg"
+  else
+    cat >"$cfg" <<'JSON'
+{
+  "mcpServers": {
+    "sequential-thinking": { "type": "sse", "url": "http://host.docker.internal:8811/sse" },
+    "server-memory":       { "type": "sse", "url": "http://host.docker.internal:8812/sse" }
+  }
+}
+JSON
+    log "Minimal .claude/settings.json erzeugt."
+  fi
+}
+
+mcp_status() {
+  echo "MCP Status:"
+  health || true
+  if command -v claude >/dev/null 2>&1; then
+    echo "Claude '/mcp' Ausgabe (gekürzt):"
+    set +e
+    claude -p "/mcp" --print 2>/dev/null | sed -n '1,40p'
+    set -e
+  else
+    echo "(Hinweis) 'claude' CLI nicht gefunden – überspringe '/mcp'."
+  fi
+}
+
+# ===== Bridge I/O =====
+send_to_bridge_file() {
+  local file="$1"
+  [[ -f "$file" ]] || die "Datei nicht gefunden: $file"
+  curl -fsS "http://127.0.0.1:$BRIDGE_PORT/run?file=/workspace${file#"$WORKSPACE"}" || die "Bridge-Aufruf fehlgeschlagen."
+}
+
+send_to_bridge_prompt() {
+  local prompt="$1"
+  [[ -n "${prompt:-}" ]] || die "Leerer Prompt."
+  curl -fsS --get "http://127.0.0.1:$BRIDGE_PORT/run" --data-urlencode "prompt=$prompt" || die "Bridge-Aufruf fehlgeschlagen."
+}
+
+ensure_oh_dirs() {
+  mkdir -p "$WORKSPACE/.openhands"
+}
+
+# ===== High-level Commands =====
+analyze() {
+  ensure_oh_dirs
+  local f="$WORKSPACE/.openhands/init_prompt.txt"
+  if [[ ! -f "$f" ]]; then
+    cat >"$f" <<'MD'
+# GOAL
+Analysiere das gesamte Repository (Code+Docs), identifiziere Probleme, TODOs, Sicherheits-/Robustheits-Punkte und erstelle eine priorisierte Aktionsliste mit konkreten Patches.
+
+# CONTEXT
+- Projekt: smolit_dev (sd) — OpenHands + MCP (SSE) + Claude Bridge
+- Environment: Node>=18, Docker, LM_BASE_URL für Offline-LLMs
+
+# DELIVERABLES
+1) Kurzfazit & Risiken
+2) Konkrete Patches (copy&paste) für CLI/Bridge/Postinstall
+3) Follow-up Plan für CI, Flowise, n8n
+
+# OUTPUT
+- Sei präzise, generiere nur überprüfbaren Code.
+MD
+  fi
+  start_bridge
+  send_to_bridge_file "$f"
+}
+
+cmd_index() {
+  ensure_oh_dirs
+  local f="$WORKSPACE/.openhands/index_repo.txt"
+  cat >"$f" <<'MD'
+# TASK
+Lies Code & Struktur des aktuellen Repos.
+- Erzeuge eine Knowledge-Map (Module, Pfade, Haupt-Funktionen, Datenflüsse)
+- Liste offene TODOs/Fehler inkl. Fundstellen
+- Eigne dich als kurzer README-Abschnitt
+
+# OUTPUT
+<KNOWLEDGE_MAP>…</KNOWLEDGE_MAP>
+<TODOS>…</TODOS>
+MD
+  start_bridge
+  send_to_bridge_file "$f"
+}
+
+cmd_test() {
+  ensure_oh_dirs
+  ( cd "$WORKSPACE" && if command -v pytest >/dev/null 2>&1; then pytest -q | tee ".openhands/test_report.txt"; else echo "pytest nicht installiert" | tee ".openhands/test_report.txt"; fi )
+  local f="$WORKSPACE/.openhands/test_prompt.txt"
+  cat >"$f" <<'MD'
+# TASK
+Analysiere die Testausgabe in /workspace/.openhands/test_report.txt.
+- Fasse Fehlerursachen zusammen
+- Erzeuge geordnete Fix-Vorschläge mit minimal-invasiven Patches (copy&paste)
+
+# OUTPUT
+<TEST_SUMMARY>…</TEST_SUMMARY>
+<PATCHES>…</PATCHES>
+MD
+  start_bridge
+  send_to_bridge_file "$f"
+}
+
+cmd_next() {
+  ensure_oh_dirs
+  local f="$WORKSPACE/.openhands/next_steps.txt"
+  cat >"$f" <<'MD'
+# TASK
+Erzeuge konkrete Next-Steps basierend auf aktuellem Wissensstand (Memory & letzte Antworten):
+- 5–10 Aufgaben in Reihenfolge
+- Je Aufgabe: Ziel, betroffene Dateien, Kurz-Patch/Command
+
+# OUTPUT
+<NEXT_STEPS>…</NEXT_STEPS>
+MD
+  start_bridge
+  send_to_bridge_file "$f"
+}
+
+# ===== Usage =====
+usage() {
+  cat <<USAGE
+sd — One-command Dev-Stack (OpenHands + MCP + Bridge)
+
+Usage:
+  sd up              # Startet OpenHands + Bridge (GUI öffnet lokal)
+  sd start           # wie 'up', ohne Browser-Open
+  sd stop            # stoppt Container & Bridge
+  sd status          # zeigt Health-Checks
+  sd logs            # zeigt Logpfad
+  sd deps doctor     # Dependency-Check
+  sd ports doctor    # Port-Check
+
+  sd project init    # erzeugt .claude/settings.json (MCP SSE)
+  sd mcp status      # zeigt /healthz & ggf. 'claude -p "/mcp"'
+
+  sd analyze         # schickt Analyse-Init-Prompt zur Bridge
+  sd index           # aktuelles Repo indexieren (Knowledge-Map)
+  sd test            # Tests laufen lassen + Patches
+  sd next            # nächste Schritte erzeugen
+
+Env:
+  ENV_FILE=$ENV_FILE
+  WORKSPACE=$WORKSPACE
+  Ports: OH=$OH_PORT SEQ=$SEQ_PORT MEM=$MEM_PORT BRIDGE=$BRIDGE_PORT
+USAGE
+}
+
+# ===== Dispatcher =====
+cmd="${1:-help}"
+shift || true
+case "$cmd" in
+  up)      start_openhands; start_bridge; open_browser ;;
+  start)   start_openhands; start_bridge ;;
+  stop)    stop_bridge; stop_openhands ;;
+  status)  health || true ;;
+  logs)    echo "$LOG_DIR" ;;
+  deps)    sub="${1:-}"; shift || true; [[ "${sub:-}" == "doctor" ]] && deps_doctor || usage ;;
+  ports)   sub="${1:-}"; shift || true; [[ "${sub:-}" == "doctor" ]] && ports_doctor || usage ;;
+  project) sub="${1:-}"; shift || true; [[ "${sub:-}" == "init" ]] && project_init || usage ;;
+  mcp)     sub="${1:-}"; shift || true; [[ "${sub:-}" == "status" ]] && mcp_status || usage ;;
+  analyze) analyze ;;
+  index)   cmd_index ;;
+  test)    cmd_test ;;
+  next)    cmd_next ;;
+  help|--help|-h) usage ;;
+  *) usage ;;
+esac

@@ -1,98 +1,107 @@
 #!/usr/bin/env node
 import http from "node:http";
-import {spawn} from "node:child_process";
-import {readFile} from "node:fs/promises";
-import {URL} from "node:url";
+import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { URL } from "node:url";
 import path from "node:path";
 
-const PORT = Number(process.env.BRIDGE_PORT || process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port")+1] : 8815);
-const WORKSPACE = process.env.WORKSPACE || (process.argv.includes("--workspace") ? process.argv[process.argv.indexOf("--workspace")+1] : process.cwd());
+const arg = (flag, fallback) => {
+  const i = process.argv.indexOf(flag);
+  return i !== -1 ? process.argv[i + 1] : fallback;
+};
+
+const PORT = Number(process.env.BRIDGE_PORT || arg("--port", 8815));
+const WORKSPACE = process.env.WORKSPACE || arg("--workspace", process.cwd());
 const DANGEROUS = process.argv.includes("--dangerously-skip-permissions");
-const ALLOWED = (process.argv.includes("--allowed-tools")
-  ? process.argv[process.argv.indexOf("--allowed-tools")+1]
-  : (process.env.SD_ALLOWED_TOOLS || "sequential-thinking,memory-shared,memory,codex-bridge"));
+const ALLOWED = arg("--allowed-tools", process.env.SD_ALLOWED_TOOLS || "sequential-thinking,memory-shared,memory,codex-bridge");
 
 const mapWorkspaceFile = (filePath) => {
-  // expects like: /workspace/...
-  if (!filePath.startsWith("/workspace")) {
+  const norm = path.posix.normalize(filePath);
+  if (!norm.startsWith("/workspace/")) {
     throw new Error(`Pfad muss mit /workspace beginnen: ${filePath}`);
   }
-  return path.join(WORKSPACE, filePath.replace("/workspace", ""));
+  const rel = norm.slice("/workspace".length);
+  const hostPath = path.resolve(path.join(WORKSPACE, rel));
+  const wsRoot = path.resolve(WORKSPACE);
+  if (!hostPath.startsWith(wsRoot)) {
+    throw new Error("Pfad außerhalb des WORKSPACE");
+  }
+  return hostPath;
 };
 
 const callClaude = async (prompt) => {
   const args = ["@anthropic-ai/claude-code", "--print", "-p", prompt];
-  if (ALLOWED) {
-    args.push("--allow", ALLOWED);
-  }
-  if (DANGEROUS) {
-    args.push("--dangerously-skip-permissions");
-  }
+  if (ALLOWED) args.push("--allow", ALLOWED);
+  if (DANGEROUS) args.push("--dangerously-skip-permissions");
 
   const env = {
     ...process.env,
-    // map key if provided as CLAUDE_API_KEY:
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || ""
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || ""
   };
 
-  const trySpawn = () =>
-    new Promise((resolve, reject) => {
-      const child = spawn("npx", args, {env, stdio: ["ignore", "pipe", "pipe"]});
-      let out = "", err = "";
-      child.stdout.on("data", (d) => { out += d.toString(); });
-      child.stderr.on("data", (d) => { err += d.toString(); });
-      child.on("close", (code, signal) => {
-        if (code === 0) return resolve(out.trim());
-        reject(new Error(`claude exited code=${code} signal=${signal} stderr=${err.trim()}`));
-      });
+  return await new Promise((resolve, reject) => {
+    const child = spawn("npx", args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      if (code !== 0) return reject(new Error(`claude exited code=${code} signal=${signal} stderr=${err.trim()}`));
+      resolve(out);
     });
-
-  // simple retry/backoff
-  let lastErr;
-  for (const backoff of [0, 500, 1500]) {
-    try {
-      if (backoff) await new Promise(r => setTimeout(r, backoff));
-      return await trySpawn();
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr;
+  });
 };
 
+const readBody = (req, limit = 1_000_000) => new Promise((resolve, reject) => {
+  let total = 0; const chunks = [];
+  req.on("data", (c) => {
+    total += c.length;
+    if (total > limit) { const e = new Error("Payload too large"); e.status = 413; req.destroy(e); reject(e); }
+    else chunks.push(c);
+  });
+  req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+  req.on("error", reject);
+});
+
 const server = http.createServer(async (req, res) => {
-  const u = new URL(req.url || "/", `http://${req.headers.host}`);
   res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") { res.writeHead(204).end(); return; }
 
-  if (u.pathname === "/healthz") {
-    res.writeHead(200, {"content-type":"text/plain"}).end("ok");
-    return;
-  }
+  const u = new URL(req.url || "/", `http://${req.headers.host}`);
+  try {
+    if (u.pathname === "/healthz") { res.writeHead(200, {"content-type":"text/plain"}).end("ok"); return; }
+    if (u.pathname === "/version") { res.writeHead(200, {"content-type":"application/json"}).end(JSON.stringify({version: process.env.npm_package_version || "dev"})); return; }
 
-  if (u.pathname === "/run") {
-    try {
+    if (u.pathname === "/run") {
       let text = "";
-      const promptParam = u.searchParams.get("prompt");
-      const fileParam = u.searchParams.get("file");
-
-      if (promptParam && promptParam.trim()) {
-        text = promptParam;
-      } else if (fileParam) {
-        const localPath = mapWorkspaceFile(fileParam);
-        text = await readFile(localPath, "utf8");
+      if (req.method === "POST") {
+        const ct = (req.headers["content-type"] || "").toLowerCase();
+        const body = await readBody(req);
+        if (ct.includes("application/json")) {
+          const json = JSON.parse(body || "{}");
+          if (json.prompt) text = String(json.prompt);
+          else if (json.file) text = await readFile(mapWorkspaceFile(json.file), "utf8");
+        } else {
+          text = body;
+        }
       } else {
-        throw new Error("Erwarte ?prompt=… oder ?file=/workspace/…");
+        const p = u.searchParams.get("prompt");
+        const f = u.searchParams.get("file");
+        if (p && p.trim()) text = p;
+        else if (f) text = await readFile(mapWorkspaceFile(f), "utf8");
       }
-
+      if (!text || !text.trim()) throw new Error("Kein 'prompt' oder 'file' angegeben.");
       const out = await callClaude(text);
       res.writeHead(200, {"content-type":"text/plain; charset=utf-8"}).end(out);
-    } catch (e) {
-      res.writeHead(400, {"content-type":"text/plain; charset=utf-8"}).end(`Bridge-Fehler: ${e.message}`);
+      return;
     }
-    return;
-  }
 
-  res.writeHead(404, {"content-type":"text/plain"}).end("not found");
+    res.writeHead(404, {"content-type":"text/plain"}).end("not found");
+  } catch (e) {
+    res.writeHead(e.status || 400, {"content-type":"text/plain; charset=utf-8"}).end(`Bridge-Fehler: ${e.message}`);
+  }
 });
 
 server.listen(PORT, "127.0.0.1", () => {

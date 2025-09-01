@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    {
+      "id": "input1",
+      "data": {
+        "label": "User Input",
+        "text": "Analysiere meinen Code"
+      },
+      "type": "inputText"
+    },
+    {
+      "id": "tool1",
+      "data": {
+        "tool": "sdBridge",
+        "url": "http://127.0.0.1:8815/run",
+        "prompt": "{{input1.text}}"
+      },
+      "type": "customTool"
+    },
+    {
+      "id": "output1",
+      "data": {
+        "label": "Claude Antwort",
+        "text": "{{tool1.response}}"
+      },
+      "type": "outputText"
+    }
+  ]
+}
+
