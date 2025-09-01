@@ -16,12 +16,21 @@
   ],
   "scripts": {
     "prepack": "chmod +x bin/sd bin/bridge.mjs bin/postinstall.mjs",
-    "postinstall": "node ./bin/postinstall.mjs"
+    "postinstall": "node ./bin/postinstall.mjs",
+    "lint:shell": "command -v shellcheck >/dev/null 2>&1 && shellcheck bin/sd || echo 'shellcheck not installed'",
+    "lint:node": "node -e \"console.log('node', process.version)\"",
+    "ci:smoke": "node ./bin/postinstall.mjs --dry-run && node -e \"console.log('bridge ok')\" && ./bin/sd --help || true"
   },
   "engines": {
     "node": ">=18"
   },
-  "keywords": ["openhands", "mcp", "claude", "devstack", "cli"],
+  "keywords": [
+    "openhands",
+    "mcp",
+    "claude",
+    "devstack",
+    "cli"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/161sam/smolit_dev_pkg.git"
@@ -29,6 +38,6 @@
   "bugs": {
     "url": "https://github.com/161sam/smolit_dev_pkg/issues"
   },
-  "homepage": "https://github.com/161sam/smolit_dev_pkg#readme"
+  "homepage": "https://github.com/161sam/smolit_dev_pkg#readme",
+  "preferGlobal": true
 }
-

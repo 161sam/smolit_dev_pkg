@@ -1,89 +1,100 @@
 #!/usr/bin/env node
 import http from "node:http";
-import { readFileSync, existsSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import {spawn} from "node:child_process";
+import {readFile} from "node:fs/promises";
+import {URL} from "node:url";
+import path from "node:path";
 
-const PORT = parseInt(process.env.CLAUDE_BRIDGE_PORT || "8815", 10);
-const WORKSPACE = process.env.WORKSPACE_ROOT || `${process.env.HOME}/OpenHands_Workspace`;
-const CLAUDE_MD = process.env.CLAUDE_MD_PATH || `${process.env.HOME}/CLAUDE.md`;
+const PORT = Number(process.env.BRIDGE_PORT || process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port")+1] : 8815);
+const WORKSPACE = process.env.WORKSPACE || (process.argv.includes("--workspace") ? process.argv[process.argv.indexOf("--workspace")+1] : process.cwd());
+const DANGEROUS = process.argv.includes("--dangerously-skip-permissions");
+const ALLOWED = (process.argv.includes("--allowed-tools")
+  ? process.argv[process.argv.indexOf("--allowed-tools")+1]
+  : (process.env.SD_ALLOWED_TOOLS || "sequential-thinking,memory-shared,memory,codex-bridge"));
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const LOCAL_BIN = join(__dirname, "..", "node_modules", ".bin");
+const mapWorkspaceFile = (filePath) => {
+  // expects like: /workspace/...
+  if (!filePath.startsWith("/workspace")) {
+    throw new Error(`Pfad muss mit /workspace beginnen: ${filePath}`);
+  }
+  return path.join(WORKSPACE, filePath.replace("/workspace", ""));
+};
 
-function resolveClaudeBin() {
-  // 1) explizit via ENV
-  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
-  // 2) lokales Bin aus Dependencies
-  const local = join(LOCAL_BIN, process.platform === "win32" ? "claude.cmd" : "claude");
-  if (existsSync(local)) return local;
-  // 3) global im PATH
-  return "claude"; // notfalls
-}
+const callClaude = async (prompt) => {
+  const args = ["@anthropic-ai/claude-code", "--print", "-p", prompt];
+  if (ALLOWED) {
+    args.push("--allow", ALLOWED);
+  }
+  if (DANGEROUS) {
+    args.push("--dangerously-skip-permissions");
+  }
 
-function runClaude(prompt) {
-  return new Promise((resolve) => {
-    const claudeBin = resolveClaudeBin();
-    const args = ["-p", prompt, "--allowed-tools", "sequential-thinking,memory-shared,codex-bridge", "--print"];
+  const env = {
+    ...process.env,
+    // map key if provided as CLAUDE_API_KEY:
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || ""
+  };
 
-    if (existsSync(CLAUDE_MD)) {
-      const sys = readFileSync(CLAUDE_MD, "utf-8");
-      args.splice(2, 0, "--append-system-prompt", sys);
-    }
-
-    let cmd = claudeBin, cmdArgs = args;
-
-    // Falls kein globales/lokales 'claude' aufrufbar, fallback auf npx
-    if (claudeBin === "claude") {
-      // Wir testen schnell, ob 'claude -v' erreichbar ist
-      const test = spawn(claudeBin, ["-v"]);
-      test.on("error", () => {
-        cmd = "npx";
-        cmdArgs = ["-y", "@anthropic-ai/claude-code", ...args];
+  const trySpawn = () =>
+    new Promise((resolve, reject) => {
+      const child = spawn("npx", args, {env, stdio: ["ignore", "pipe", "pipe"]});
+      let out = "", err = "";
+      child.stdout.on("data", (d) => { out += d.toString(); });
+      child.stderr.on("data", (d) => { err += d.toString(); });
+      child.on("close", (code, signal) => {
+        if (code === 0) return resolve(out.trim());
+        reject(new Error(`claude exited code=${code} signal=${signal} stderr=${err.trim()}`));
       });
-      test.on("close", () => {
-        const p = spawn(cmd, cmdArgs, { stdio: ["ignore", "pipe", "pipe"] });
-        let out = "", err = "";
-        p.stdout.on("data", d => out += d.toString());
-        p.stderr.on("data", d => err += d.toString());
-        p.on("close", () => resolve(out + (err ? `\n[stderr]\n${err}` : "")));
-      });
-      return;
+    });
+
+  // simple retry/backoff
+  let lastErr;
+  for (const backoff of [0, 500, 1500]) {
+    try {
+      if (backoff) await new Promise(r => setTimeout(r, backoff));
+      return await trySpawn();
+    } catch (e) {
+      lastErr = e;
     }
-
-    const p = spawn(cmd, cmdArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    let out = "", err = "";
-    p.stdout.on("data", d => out += d.toString());
-    p.stderr.on("data", d => err += d.toString());
-    p.on("close", () => resolve(out + (err ? `\n[stderr]\n${err}` : "")));
-  });
-}
-
-function hostPathFromWorkspace(p) {
-  if (!p?.startsWith("/workspace/")) return null;
-  return join(WORKSPACE, p.slice("/workspace/".length));
-}
+  }
+  throw lastErr;
+};
 
 const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    if (url.pathname === "/healthz") { res.writeHead(200).end("ok"); return; }
-    if (url.pathname !== "/run") { res.writeHead(404).end(); return; }
+  const u = new URL(req.url || "/", `http://${req.headers.host}`);
+  res.setHeader("Access-Control-Allow-Origin", "*");
 
-    const f = url.searchParams.get("file");
-    const hostPath = hostPathFromWorkspace(f);
-    if (!hostPath || !existsSync(hostPath)) { res.writeHead(400).end("invalid file"); return; }
-
-    const prompt = readFileSync(hostPath, "utf-8");
-    const output = await runClaude(prompt);
-    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end(output);
-  } catch (e) {
-    res.writeHead(500).end(String(e));
+  if (u.pathname === "/healthz") {
+    res.writeHead(200, {"content-type":"text/plain"}).end("ok");
+    return;
   }
+
+  if (u.pathname === "/run") {
+    try {
+      let text = "";
+      const promptParam = u.searchParams.get("prompt");
+      const fileParam = u.searchParams.get("file");
+
+      if (promptParam && promptParam.trim()) {
+        text = promptParam;
+      } else if (fileParam) {
+        const localPath = mapWorkspaceFile(fileParam);
+        text = await readFile(localPath, "utf8");
+      } else {
+        throw new Error("Erwarte ?prompt=… oder ?file=/workspace/…");
+      }
+
+      const out = await callClaude(text);
+      res.writeHead(200, {"content-type":"text/plain; charset=utf-8"}).end(out);
+    } catch (e) {
+      res.writeHead(400, {"content-type":"text/plain; charset=utf-8"}).end(`Bridge-Fehler: ${e.message}`);
+    }
+    return;
+  }
+
+  res.writeHead(404, {"content-type":"text/plain"}).end("not found");
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`smolit_dev bridge on :${PORT} (workspace=${WORKSPACE})`);
+server.listen(PORT, "127.0.0.1", () => {
+  console.log(`[bridge] listening on http://127.0.0.1:${PORT} (workspace=${WORKSPACE})`);
 });
-

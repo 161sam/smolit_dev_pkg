@@ -1,0 +1,13 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  pack-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm ci || npm i
+      - run: npm pack
+      - run: node -e "console.log('pack ok')"
+

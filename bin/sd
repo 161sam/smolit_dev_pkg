@@ -1,386 +1,315 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+IFS=$'\n\t'
 
-# ===========================
-# smolit_dev CLI  (sd)
-# ===========================
+# ========== Defaults & Env ==========
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 
-APP="smolit_dev"
-CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$APP"
-ENV_FILE="$CFG_DIR/.env"
-LOG_DIR="$HOME/.openhands/logs"
-PID_DIR="${XDG_RUNTIME_DIR:-/tmp}/${APP}-pids"
-WORKSPACE_DEFAULT="$HOME/OpenHands_Workspace"
+CONF_DIR="$XDG_CONFIG_HOME/smolit_dev"
+STATE_DIR="$XDG_STATE_HOME/smolit_dev"
+CACHE_DIR="$XDG_CACHE_HOME/smolit_dev"
+LOG_DIR="$STATE_DIR/logs"
+PID_DIR="$STATE_DIR/pids"
 
-mkdir -p "$CFG_DIR" "$LOG_DIR" "$PID_DIR"
+mkdir -p "$CONF_DIR" "$STATE_DIR" "$CACHE_DIR" "$LOG_DIR" "$PID_DIR"
 
-# --- Load .env if present ---
-[ -f "$ENV_FILE" ] && set -a && . "$ENV_FILE" && set +a
+ENV_FILE="${ENV_FILE:-$CONF_DIR/.env}"
+[[ -f "$ENV_FILE" ]] && set -a && . "$ENV_FILE" && set +a
 
-# --- Defaults (can be overridden in .env) ---
-WORKSPACE="${WORKSPACE:-$WORKSPACE_DEFAULT}"
-LM_BASE_URL="${LM_BASE_URL:-http://192.168.0.45:1234/v1}"
+WORKSPACE="${WORKSPACE:-$PWD}"
+OH_IMAGE="${OH_IMAGE:-openhands/supergateway:latest}"
+OH_NAME="${OH_NAME:-sd_oh}"
 OH_PORT="${OH_PORT:-3311}"
 SEQ_PORT="${SEQ_PORT:-8811}"
 MEM_PORT="${MEM_PORT:-8812}"
 BRIDGE_PORT="${BRIDGE_PORT:-8815}"
-MEM_FILE="${MEM_FILE:-$HOME/.mcp/memory/memory_shared.json}"
+LM_BASE_URL="${LM_BASE_URL:-http://127.0.0.1:1234/v1}"
 
-OH_IMAGE="${OH_IMAGE:-docker.all-hands.dev/all-hands-ai/openhands:0.54.0}"
-RUNTIME_IMAGE="${RUNTIME_IMAGE:-docker.all-hands.dev/all-hands-ai/runtime:0.54.0-nikolaik}"
+# Permissions / Security
+SD_BYPASS_PERMISSIONS="${SD_BYPASS_PERMISSIONS:-}"
+SD_ALLOWED_TOOLS="${SD_ALLOWED_TOOLS:-sequential-thinking,memory-shared,memory,codex-bridge}"
 
-export WORKSPACE LM_BASE_URL OH_PORT SEQ_PORT MEM_PORT BRIDGE_PORT MEM_FILE
+BRIDGE_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bridge.mjs"
+POSTINSTALL_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/postinstall.mjs"
 
-# --- Paths (package-relative) ---
-SCRIPT_SOURCE="${BASH_SOURCE[0]}"; while [ -L "$SCRIPT_SOURCE" ]; do DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"; SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"; [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$DIR/$SCRIPT_SOURCE"; done; SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+log()   { echo -e "\e[36m[sd]\e[0m $*"; }
+warn()  { echo -e "\e[33m[sd warn]\e[0m $*" >&2; }
+die()   { echo -e "\e[31m[sd err]\e[0m $*" >&2; exit 1; }
 
-# ----------------- Helpers -----------------
-die(){ echo "ERR: $*" >&2; exit 1; }
-info(){ echo "[sd] $*"; }
-mask(){ local s="${1:-}"; [ -z "$s" ] && echo "" || echo "${s:0:3}***${s: -2}"; }
-need(){ command -v "$1" >/dev/null || die "Missing dependency: $1"; }
+need()  { command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1"; }
 
-ensure_node_tools() {
-  if ! command -v npx >/dev/null 2>&1; then
-    # try nvm
-    if [ -s "$HOME/.nvm/nvm.sh" ]; then
-      # shellcheck disable=SC1090
-      . "$HOME/.nvm/nvm.sh"
-      command -v npx >/dev/null 2>&1 || nvm use --lts >/dev/null 2>&1 || true
-    fi
+pidfile() { echo "$PID_DIR/$1.pid"; }
+is_running() { [[ -f "$(pidfile "$1")" ]] && kill -0 "$(cat "$(pidfile "$1")")" 2>/dev/null; }
+
+start_bridge() {
+  if lsof -iTCP:"$BRIDGE_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    warn "Bridge-Port $BRIDGE_PORT bereits belegt – überspringe Start."
+    return 0
   fi
-  need npx
+  log "Starte Bridge auf Port $BRIDGE_PORT (WORKSPACE=$WORKSPACE)…"
+  nohup node "$BRIDGE_BIN" \
+    --port "$BRIDGE_PORT" \
+    --workspace "$WORKSPACE" \
+    --allowed-tools "$SD_ALLOWED_TOOLS" \
+    $( [[ -n "$SD_BYPASS_PERMISSIONS" ]] && echo "--dangerously-skip-permissions" ) \
+    >>"$LOG_DIR/bridge.log" 2>&1 &
+
+  echo $! >"$(pidfile bridge)"
+  sleep 0.3
+  curl -fsS "http://127.0.0.1:$BRIDGE_PORT/healthz" >/dev/null 2>&1 || warn "Bridge healthz nicht erreichbar (noch bootend?)"
 }
 
-ensure_dirs() {
-  mkdir -p "$WORKSPACE" "$HOME/.mcp/memory" "$HOME/.openhands" "$LOG_DIR" "$PID_DIR" "$WORKSPACE/.openhands"
+stop_bridge() {
+  if is_running bridge; then
+    log "Stoppe Bridge (PID $(cat "$(pidfile bridge)") )…"
+    kill "$(cat "$(pidfile bridge)")" 2>/dev/null || true
+    rm -f "$(pidfile bridge)"
+  fi
 }
 
-save_env() {
-  mkdir -p "$CFG_DIR"
-  cat >"$ENV_FILE" <<EOF
-# smolit_dev .env
-WORKSPACE="$WORKSPACE"
-LM_BASE_URL="$LM_BASE_URL"
-OH_PORT="$OH_PORT"
-SEQ_PORT="$SEQ_PORT"
-MEM_PORT="$MEM_PORT"
-BRIDGE_PORT="$BRIDGE_PORT"
-MEM_FILE="$MEM_FILE"
-CLAUDE_API_KEY="${CLAUDE_API_KEY:-}"
-CODEX_API_KEY="${CODEX_API_KEY:-}"
-EOF
+start_openhands() {
+  need docker
+  if docker ps --format '{{.Names}}' | grep -q "^${OH_NAME}\$"; then
+    warn "OpenHands Container '$OH_NAME' läuft bereits."
+    return 0
+  fi
+  log "Starte OpenHands ($OH_IMAGE) auf Ports GUI:$OH_PORT SEQ:$SEQ_PORT MEM:$MEM_PORT …"
+  docker run -d --rm \
+    --name "$OH_NAME" \
+    --add-host host.docker.internal:host-gateway \
+    -p "$OH_PORT:3311" -p "$SEQ_PORT:8811" -p "$MEM_PORT:8812" \
+    -e LM_BASE_URL="$LM_BASE_URL" \
+    -v "$WORKSPACE:/workspace" \
+    "$OH_IMAGE" \
+    >/dev/null
 }
 
-wait_ready(){
-  local url="$1" name="$2" tries="${3:-60}"
-  info "waiting $name $url"
-  for _ in $(seq 1 "$tries"); do
-    if curl -sS -f --max-time 1 "$url" >/dev/null; then info "$name ok"; return 0; fi
-    sleep 0.25
-  done
-  info "WARN: $name not ready"
-  return 1
+stop_openhands() {
+  if docker ps --format '{{.Names}}' | grep -q "^${OH_NAME}\$"; then
+    log "Stoppe OpenHands Container '$OH_NAME' …"
+    docker rm -f "$OH_NAME" >/dev/null || true
+  fi
 }
 
-start_sse_seq(){
-  info "SSE seq :$SEQ_PORT"
-  ensure_node_tools
-  npx -y supergateway \
-    --stdio "npx -y @modelcontextprotocol/server-sequential-thinking" \
-    --port "$SEQ_PORT" --healthEndpoint /healthz --logLevel info \
-    >"$LOG_DIR/sse-seq.log" 2>&1 & echo $! > "$PID_DIR/sse-seq.pid"
+open_browser() {
+  local url="http://127.0.0.1:$OH_PORT"
+  if command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 || true; fi
+  echo "GUI: $url"
 }
 
-start_sse_mem(){
-  info "SSE mem :$MEM_PORT ($MEM_FILE)"
-  [ -f "$MEM_FILE" ] || [ -f "$MEM_FILE" ] || : > "$MEM_FILE"
-  ensure_node_tools
-  npx -y supergateway \
-    --stdio "env MEMORY_FILE_PATH=$MEM_FILE npx -y @modelcontextprotocol/server-memory" \
-    --port "$MEM_PORT" --healthEndpoint /healthz --logLevel info \
-    >"$LOG_DIR/sse-mem.log" 2>&1 & echo $! > "$PID_DIR/sse-mem.pid"
-}
-
-start_bridge(){
-  info "Claude bridge :$BRIDGE_PORT"
-  ANTHROPIC_API_KEY="${CLAUDE_API_KEY:-}" \
-  OPENAI_API_KEY="${CODEX_API_KEY:-}" \
-  WORKSPACE_ROOT="$WORKSPACE" \
-  CLAUDE_BRIDGE_PORT="$BRIDGE_PORT" \
-  CLAUDE_MD_PATH="${CLAUDE_MD_PATH:-$HOME/CLAUDE.md}" \
-  node "$SCRIPT_DIR/bridge.mjs" >"$LOG_DIR/claude-bridge.log" 2>&1 & echo $! > "$PID_DIR/claude-bridge.pid"
-}
-
-stop_bg(){
-  for svc in sse-seq sse-mem claude-bridge; do
-    local pf="$PID_DIR/$svc.pid"; [ -f "$pf" ] || continue
-    local pid; pid="$(cat "$pf" 2>/dev/null || true)"
-    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
-      info "stop $svc ($pid)"
-      kill "$pid" 2>/dev/null || true; sleep 0.5
-      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+health() {
+  local ok=0
+  for url in \
+    "http://127.0.0.1:$OH_PORT" \
+    "http://127.0.0.1:$SEQ_PORT/healthz" \
+    "http://127.0.0.1:$MEM_PORT/healthz" \
+    "http://127.0.0.1:$BRIDGE_PORT/healthz"
+  do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      echo -e "  ✓ $url"
+      ok=$((ok+1))
+    else
+      echo -e "  ✗ $url"
     fi
-    rm -f "$pf"
+  done
+  [[ $ok -ge 1 ]] || return 1
+}
+
+ports_doctor() {
+  echo "Port-Check:"
+  for p in "$OH_PORT" "$SEQ_PORT" "$MEM_PORT" "$BRIDGE_PORT"; do
+    if lsof -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "  ✗ Port $p belegt:"
+      lsof -iTCP:"$p" -sTCP:LISTEN | awk 'NR==1 || NR==2'
+    else
+      echo "  ✓ Port $p frei"
+    fi
   done
 }
 
-banner(){
-  echo
-  echo "────────────────────────────────────────────────────────"
-  echo " OpenHands GUI            : http://127.0.0.1:${OH_PORT}"
-  echo " Claude Bridge            : http://127.0.0.1:${BRIDGE_PORT}/healthz"
-  echo " SSE SequentialThinking   : http://127.0.0.1:${SEQ_PORT}/healthz"
-  echo " SSE Memory               : http://127.0.0.1:${MEM_PORT}/healthz"
-  echo " Workspace                : $WORKSPACE"
-  echo "────────────────────────────────────────────────────────"
-  echo " TIP (GUI): @init …  |  @c …"
-  echo " TIP (CLI): sd send init \"…\"   |   sd send c \"…\""
-  echo "────────────────────────────────────────────────────────"
-  echo
+project_init() {
+  local cfg="$WORKSPACE/.claude/settings.json"
+  mkdir -p "$WORKSPACE/.claude"
+  if [[ -f "$cfg" ]]; then
+    log "Settings vorhanden: $cfg"
+  else
+    cat >"$cfg" <<'JSON'
+{
+  "mcpServers": {
+    "sequential-thinking": { "type": "sse", "url": "http://host.docker.internal:8811/sse" },
+    "server-memory":       { "type": "sse", "url": "http://host.docker.internal:8812/sse" }
+  }
 }
-
-start_openhands_fg(){
-  need docker
-  info "ensure no old container"; docker rm -f openhands-app 2>/dev/null || true
-  banner
-  info "OpenHands http://127.0.0.1:${OH_PORT}  (Container may log 0.0.0.0:3000)"
-  docker run -it --rm --pull=always \
-    -e SANDBOX_RUNTIME_CONTAINER_IMAGE="$RUNTIME_IMAGE" \
-    -e LOG_ALL_EVENTS=true \
-    -e SANDBOX_VSCODE_PORT=9333 \
-    -e SANDBOX_RUNTIME_BINDING_ADDRESS=127.0.0.1 \
-    -e SANDBOX_VOLUMES="$WORKSPACE:/workspace:rw" \
-    -e OH_LLM_BASE_URL="$LM_BASE_URL" \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$HOME/.openhands:/.openhands" \
-    -p 127.0.0.1:"$OH_PORT":3000 \
-    --add-host host.docker.internal:host-gateway \
-    --name openhands-app \
-    "$OH_IMAGE"
-}
-
-start_openhands_detached(){
-  need docker
-  info "ensure no old container"; docker rm -f openhands-app 2>/dev/null || true
-  docker run -d --pull=always \
-    -e SANDBOX_RUNTIME_CONTAINER_IMAGE="$RUNTIME_IMAGE" \
-    -e LOG_ALL_EVENTS=true \
-    -e SANDBOX_VSCODE_PORT=9333 \
-    -e SANDBOX_RUNTIME_BINDING_ADDRESS=127.0.0.1 \
-    -e SANDBOX_VOLUMES="$WORKSPACE:/workspace:rw" \
-    -e OH_LLM_BASE_URL="$LM_BASE_URL" \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$HOME/.openhands:/.openhands" \
-    -p 127.0.0.1:"$OH_PORT":3000 \
-    --add-host host.docker.internal:host-gateway \
-    --name openhands-app \
-    "$OH_IMAGE" >/dev/null
-  info "OpenHands läuft: http://127.0.0.1:${OH_PORT}"
-  command -v xdg-open >/dev/null && xdg-open "http://127.0.0.1:${OH_PORT}" >/dev/null 2>&1 || true
-}
-
-ensure_microagents(){
-  mkdir -p "$WORKSPACE/.openhands/microagents"
-  for f in "send-to-claude.md" "talk-to-claude.md"; do
-    [ -f "$WORKSPACE/.openhands/microagents/$f" ] || \
-      cp "$PKG_DIR/templates/$f" "$WORKSPACE/.openhands/microagents/$f"
-  done
-}
-
-send_via_bridge(){
-  local rel="$1" text="$2"
-  mkdir -p "$WORKSPACE/.openhands"
-  printf "%s" "$text" > "$WORKSPACE/.openhands/$rel"
-  curl -sS -f "http://127.0.0.1:${BRIDGE_PORT}/run?file=/workspace/.openhands/$rel" || die "Bridge call failed"
-  echo
-}
-
-repl(){
-  echo "──────────── sd REPL ────────────"
-  echo "Kommandos: :init  :c  :open  :quit   (Text mit '.' beenden)"
-  local mode="init" buf line
-  while true; do
-    printf "[%s] > " "$mode"; buf=""
-    while IFS= read -r line; do
-      [ "$line" = "." ] && break
-      case "$line" in
-        :init) mode="init"; buf=""; break;;
-        :c)    mode="c";    buf=""; break;;
-        :open) command -v xdg-open >/dev/null && xdg-open "http://127.0.0.1:${OH_PORT}" >/dev/null 2>&1; buf=""; break;;
-        :quit) return 0;;
-        *) buf+="${line}"$'\n';;
-      esac
-    done
-    [ -z "$buf" ] && continue
-    [ "$mode" = "init" ] && send_via_bridge "init_prompt.txt" "$buf" || send_via_bridge "followup_prompt.txt" "$buf"
-  done
-}
-
-print_help(){
-  cat <<H
-Usage: sd <command>
-
- Core:
-   sd start            # Stack im Vordergrund (Logs)
-   sd up               # Stack im Hintergrund + Browser öffnen
-   sd start-repl       # up + interaktive Terminal-Session
-   sd repl             # nur interaktive Session (wenn Stack läuft)
-   sd stop | status | logs
-
- Prompts:
-   sd send init "GOAL …"
-   sd send c    "Follow-up …"
-
- Setup:
-   sd keys init             # First-run: schreibt ~/.config/smolit_dev/.env
-   sd keys set claude "<KEY>" | codex "<KEY>"
-   sd keys show
-   sd llm list              # aus LM Studio
-   sd llm use <model-id>
-
- Deps:
-   sd deps install          # Hinweis (lokale Deps sind im Package)
-   sd deps install-global   # optional: globale CLIs (claude/codex)
-   sd deps doctor           # Checks
-
-H
-}
-
-# ----------------- Subcommands -----------------
-cmd="${1:-help}"; shift || true
-
-case "$cmd" in
-  start)
-    trap 'echo; echo "[sd] stopping ..."; stop_bg' EXIT INT TERM
-    need docker; need curl; ensure_node_tools; ensure_dirs; ensure_microagents
-    start_sse_seq; start_sse_mem; start_bridge
-    wait_ready "http://127.0.0.1:$SEQ_PORT/healthz" "SSE seq" || true
-    wait_ready "http://127.0.0.1:$MEM_PORT/healthz" "SSE mem" || true
-    wait_ready "http://127.0.0.1:$BRIDGE_PORT/healthz" "Claude bridge" || true
-    start_openhands_fg
-    ;;
-  up)
-    need docker; need curl; ensure_node_tools; ensure_dirs; ensure_microagents
-    start_sse_seq; start_sse_mem; start_bridge
-    wait_ready "http://127.0.0.1:$SEQ_PORT/healthz" "SSE seq" || true
-    wait_ready "http://127.0.0.1:$MEM_PORT/healthz" "SSE mem" || true
-    wait_ready "http://127.0.0.1:$BRIDGE_PORT/healthz" "Claude bridge" || true
-    start_openhands_detached
-    ;;
-  start-repl)
-    "$0" up
-    echo "[sd] REPL verbindet → Bridge @ http://127.0.0.1:${BRIDGE_PORT}"
-    repl
-    ;;
-  repl)
-    repl
-    ;;
-  stop)
-    stop_bg; docker rm -f openhands-app 2>/dev/null || true
-    ;;
-  status)
-    echo "=== sd status ==="
-    for pf in "$PID_DIR"/*.pid; do [ -f "$pf" ] || continue; echo "$(basename "$pf" .pid): $(cat "$pf")"; done
-    docker ps --filter name=openhands-app
-    ;;
-  logs)
-    echo "Logs in $LOG_DIR"; ls -l "$LOG_DIR"
-    ;;
-  send)
-    sub="${1:-}"; shift || true
-    case "$sub" in
-      init)       [ $# -ge 1 ] || die "Usage: sd send init \"text\""; send_via_bridge "init_prompt.txt" "$*";;
-      c|followup) [ $# -ge 1 ] || die "Usage: sd send c \"text\"";    send_via_bridge "followup_prompt.txt" "$*";;
-      *) die "Usage: sd send {init|c} \"text\"";;
-    esac
-    ;;
-  keys)
-    sub="${1:-}"; shift || true
-    case "$sub" in
-      init)
-        read -rp "CLAUDE_API_KEY (leer lassen, wenn schon via 'claude setup-token' konfiguriert): " CLAUDE_API_KEY || true
-        read -rp "CODEX_API_KEY   (optional): " CODEX_API_KEY || true
-        save_env; echo "[sd] .env geschrieben: $ENV_FILE"
-        ;;
-      set)
-        which="${1:-}"; val="${2:-}"; [ -n "$which" ] && [ -n "$val" ] || die "Usage: sd keys set {claude|codex} VALUE"
-        case "$which" in
-          claude) CLAUDE_API_KEY="$val";;
-          codex)  CODEX_API_KEY="$val";;
-          *) die "Use 'claude' or 'codex'";;
-        esac
-        save_env; echo "[sd] gespeichert. CLAUDE=$(mask "${CLAUDE_API_KEY:-}") CODEX=$(mask "${CODEX_API_KEY:-}")"
-        ;;
-      show)
-        echo "CLAUDE_API_KEY=$(mask "${CLAUDE_API_KEY:-}")"
-        echo "CODEX_API_KEY=$(mask "${CODEX_API_KEY:-}")"
-        ;;
-      *) die "Usage: sd keys {init|set|show}";;
-    esac
-    ;;
-  llm)
-    sub="${1:-}"; shift || true
-    case "$sub" in
-      list)
-        need curl
-        if command -v jq >/dev/null 2>&1; then
-          curl -s "${LM_BASE_URL}/models" | jq -r '.data[].id'
-        else
-          info "jq fehlt – rohes JSON folgt:"
-          curl -s "${LM_BASE_URL}/models"
-        fi
-        ;;
-      use|select)
-        model="${1:-}"; [ -n "$model" ] || die "Usage: sd llm use <model-id>"
-        SETTINGS="$HOME/.openhands/settings.json"
-        mkdir -p "$HOME/.openhands"
-        if command -v jq >/dev/null 2>&1 && [ -f "$SETTINGS" ]; then
-          tmp="$(mktemp)"
-          jq --arg m "$model" --arg b "$LM_BASE_URL" \
-             '.llm_model=$m | .llm_base_url=$b' "$SETTINGS" >"$tmp" && mv "$tmp" "$SETTINGS"
-        else
-          cat >"$SETTINGS" <<JSON
-{"language":"en","agent":"CodeActAgent","llm_model":"$model","llm_api_key":"lm-studio","llm_base_url":"$LM_BASE_URL","mcp_config":{"sse_servers":[{"url":"http://host.docker.internal:$SEQ_PORT/sse"},{"url":"http://host.docker.internal:$MEM_PORT/sse"}]}}
 JSON
-        fi
-        echo "[sd] LLM gesetzt: $model @ $LM_BASE_URL"
-        ;;
-      *) die "Usage: sd llm {list|use <model-id>}";;
-    esac
-    ;;
-  deps)
-    sub="${1:-}"; shift || true
-    case "$sub" in
-      install)
-        echo "[sd] Lokale CLI-Dependencies werden durch npm dependencies bereitgestellt."
-        echo "[sd] (Optional) globale CLIs installieren:"
-        echo "     npm i -g @anthropic-ai/claude-code @openai/codex"
-        ;;
-      install-global)
-        npm i -g @anthropic-ai/claude-code @openai/codex
-        ;;
-      doctor)
-        echo "[sd] Checking binaries..."
-        for b in node npm docker npx curl; do command -v "$b" >/dev/null && echo "  ✓ $b" || echo "  ✗ $b"; done
-        if command -v jq >/dev/null; then echo "  ✓ jq"; else echo "  ✗ jq (optional)"; fi
-        # check claude/codex availability (local bin or global)
-        for c in "claude" "codex"; do
-          if command -v "$c" >/dev/null 2>&1; then
-            echo "  ✓ $c (global)"
-          elif [ -x "$PKG_DIR/node_modules/.bin/$c" ]; then
-            echo "  ✓ $c (local @smolit/_dev)"
-          else
-            echo "  ✗ $c (will fallback to npx if possible)"
-          fi
-        done
-        ;;
-      *) echo "Usage: sd deps {install|install-global|doctor}"; exit 2;;
-    esac
-    ;;
-  help|*)
-    print_help
-    ;;
-esac
+    log "Minimal .claude/settings.json erzeugt."
+  fi
+}
 
+mcp_status() {
+  echo "MCP Status:"
+  health || true
+  if command -v claude >/dev/null 2>&1; then
+    echo "Claude '/mcp' Ausgabe (gekürzt):"
+    set +e
+    claude -p "/mcp" --print 2>/dev/null | sed -n '1,40p'
+    set -e
+  else
+    echo "(Hinweis) 'claude' CLI nicht gefunden – überspringe '/mcp'."
+  fi
+}
+
+send_to_bridge() {
+  local file="$1"
+  [[ -f "$file" ]] || die "Datei nicht gefunden: $file"
+  curl -fsS "http://127.0.0.1:$BRIDGE_PORT/run?file=/workspace${file#"$WORKSPACE"}" || die "Bridge-Aufruf fehlgeschlagen."
+}
+
+ensure_oh_dirs() {
+  mkdir -p "$WORKSPACE/.openhands"
+}
+
+analyze() {
+  ensure_oh_dirs
+  local f="$WORKSPACE/.openhands/init_prompt.txt"
+  if [[ ! -f "$f" ]]; then
+    cat >"$f" <<'MD'
+# GOAL
+Analysiere das gesamte Repository (Code+Docs), identifiziere Probleme, TODOs, Sicherheits-/Robustheits-Punkte und erstelle eine priorisierte Aktionsliste mit konkreten Patches.
+
+# CONTEXT
+- Projekt: smolit_dev (sd) — OpenHands + MCP (SSE) + Claude Bridge
+- Environment: Node>=18, Docker, LM_BASE_URL für Offline-LLMs
+
+# DELIVERABLES
+1) Kurzfazit & Risiken
+2) Konkrete Patches (copy&paste) für CLI/Bridge/Postinstall
+3) Follow-up Plan: Integration in Sprachassistent (va), Flowise, n8n
+
+# OUTPUT
+- Sei präzise, generiere nur überprüfbaren Code.
+MD
+  fi
+  start_bridge
+  send_to_bridge "$f"
+}
+
+sa_index() {
+  ensure_oh_dirs
+  local f="$WORKSPACE/.openhands/index_sprachassistent.txt"
+  cat >"$f" <<'MD'
+# TASK
+Lies den Code & die Ordnerstruktur des Sprachassistent-Projekts.
+- Baue eine stichwortartige Knowledge-Map (Module, Pfade, Haupt-Funktionen)
+- Extrahiere offene TODOs/Fehler (inkl. Fundstelle)
+- Speichere eine kompakte Übersicht (geeignet als README-Abschnitt)
+
+# OUTPUT
+<KNOWLEDGE_MAP>
+...
+</KNOWLEDGE_MAP>
+<TODOS>
+...
+</TODOS>
+MD
+  start_bridge
+  send_to_bridge "$f"
+}
+
+sa_test() {
+  ensure_oh_dirs
+  ( cd "$WORKSPACE" && if command -v pytest >/dev/null 2>&1; then pytest -q | tee ".openhands/test_report.txt"; else echo "pytest nicht installiert"; fi )
+  local f="$WORKSPACE/.openhands/test_prompt.txt"
+  cat >"$f" <<'MD'
+# TASK
+Analysiere die Testausgabe in /workspace/.openhands/test_report.txt.
+- Fasse Fehlerursachen zusammen
+- Erzeuge geordnete Fix-Vorschläge mit minimal-invasiven Patches
+
+# OUTPUT
+<TEST_SUMMARY>…</TEST_SUMMARY>
+<PATCHES>…</PATCHES>
+MD
+  start_bridge
+  send_to_bridge "$f"
+}
+
+sa_next() {
+  ensure_oh_dirs
+  local f="$WORKSPACE/.openhands/next_steps.txt"
+  cat >"$f" <<'MD'
+# TASK
+Erzeuge aus vorhandenem Wissensstand (Memory, letzte Antworten) konkrete Next-Steps:
+- 5–10 Aufgaben in Umsetzungreihenfolge
+- Je Aufgabe: Ziel, betroffene Dateien, Kurz-Patch/Command
+
+# OUTPUT
+<NEXT_STEPS>…</NEXT_STEPS>
+MD
+  start_bridge
+  send_to_bridge "$f"
+}
+
+deps_doctor() {
+  echo "Dependencies:"
+  for b in docker node npm curl; do
+    if command -v "$b" >/dev/null 2>&1; then
+      echo "  ✓ $b: $(command -v "$b")"
+    else
+      echo "  ✗ $b fehlt"
+    fi
+  done
+}
+
+usage() {
+  cat <<USAGE
+sd — One-command Dev-Stack (OpenHands + MCP + Bridge)
+
+Usage:
+  sd up              # Startet OpenHands + Bridge (GUI öffnet lokal)
+  sd start           # wie 'up', ohne Browser-Open
+  sd stop            # stoppt Container & Bridge
+  sd status          # zeigt Health-Checks
+  sd logs            # zeigt Logpfad
+  sd deps doctor     # Dependency-Check
+  sd ports doctor    # Port-Check
+
+  sd project init    # erzeugt .claude/settings.json (MCP SSE)
+  sd mcp status      # zeigt /healthz & ggf. 'claude -p "/mcp"'
+
+  sd analyze         # schickt Analyse-Init-Prompt zur Bridge
+  sd sa index        # indexiert Sprachassistent (Knowledge-Map)
+  sd sa test         # pytest -> Zusammenfassung & Patches
+  sd sa next         # nächste Schritte erzeugen
+
+Env:
+  ENV_FILE=$ENV_FILE
+  WORKSPACE=$WORKSPACE
+  Ports: OH=$OH_PORT SEQ=$SEQ_PORT MEM=$MEM_PORT BRIDGE=$BRIDGE_PORT
+USAGE
+}
+
+cmd="${1:-help}"
+shift || true
+case "$cmd" in
+  up)      start_openhands; start_bridge; open_browser ;;
+  start)   start_openhands; start_bridge ;;
+  stop)    stop_bridge; stop_openhands ;;
+  status)  health || true ;;
+  logs)    echo "$LOG_DIR" ;;
+  deps)    sub="${1:-}"; shift || true; [[ "$sub" == "doctor" ]] && deps_doctor || usage ;;
+  ports)   sub="${1:-}"; shift || true; [[ "$sub" == "doctor" ]] && ports_doctor || usage ;;
+  project) sub="${1:-}"; shift || true; [[ "$sub" == "init" ]] && project_init || usage ;;
+  mcp)     sub="${1:-}"; shift || true; [[ "$sub" == "status" ]] && mcp_status || usage ;;
+  analyze) analyze ;;
+  sa)      sub="${1:-}"; shift || true;
+           case "${sub:-}" in
+             index) sa_index ;;
+             test)  sa_test ;;
+             next)  sa_next ;;
+             *)     usage ;;
+           esac ;;
+  help|--help|-h) usage ;;
+  *) usage ;;
+esac
