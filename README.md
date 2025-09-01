@@ -177,10 +177,12 @@ Wichtige Variablen:
 Beim Start kopiert `sd` Templates nach
 `$WORKSPACE/.openhands/microagents/` (falls nicht vorhanden):
 
-* `send-to-claude.md` – Trigger `@init`, schreibt `init_prompt.txt`, ruft Bridge:
+- `templates/microagent/send-to-claude.md` – Trigger `@init`, schreibt `init_prompt.txt`, ruft Bridge:  
   `http://host.docker.internal:8815/run?file=/workspace/.openhands/init_prompt.txt`
-* `talk-to-claude.md` – Trigger `@c`, schreibt `followup_prompt.txt`, ruft Bridge:
+- `templates/microagent/talk-to-claude.md` – Trigger `@c`, schreibt `followup_prompt.txt`, ruft Bridge:  
   `http://host.docker.internal:8815/run?file=/workspace/.openhands/followup_prompt.txt`
+
+Weitere Prompt-Vorlagen liegen unter `templates/prompt/`.
 
 > Wichtig: Der OpenHands-Container erreicht den Host via
 > `host.docker.internal` (in `sd` bereits mit `--add-host …` gesetzt).
