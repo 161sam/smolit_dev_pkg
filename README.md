@@ -35,7 +35,7 @@ npm i -g github:161sam/smolit_dev_pkg
 ````
 **Setup**
 ```bash
-sd keys init   # (optional, falls implementiert)
+sd keys init
 ```
 
 ### 2. Docker
