@@ -1,0 +1,27 @@
+name: infoterminal_dbt
+version: 1.0
+config-version: 2
+profile: infoterminal_dbt
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+models:
+  infoterminal_dbt:
+    +materialized: view
+
+seeds:
+  +schema: "{{ var('db_schema_seed','seed') }}"
+  +quote_columns: false
+  infoterminal_dbt:
+    demo_assets:
+      +alias: assets
+      +column_types:
+        ingested_at: timestamp
+    demo_prices:
+      +alias: prices
+      +column_types:
+        ts: date
+        ingested_at: timestamp
