@@ -1,6 +1,6 @@
 {
   "name": "smolit-dev",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "One-command Dev-Stack: OpenHands + MCP (SSE) + Claude-Bridge — mit GUI & CLI.",
   "type": "module",
   "license": "MIT",
@@ -45,8 +45,7 @@
     "url": "https://github.com/161sam/smolit_dev_pkg/issues"
   },
   "homepage": "https://github.com/161sam/smolit_dev_pkg#readme",
-  "preferGlobal": true
-  ,
+  "preferGlobal": true,
   "devDependencies": {
     "@eslint/js": "^9.8.0",
     "eslint": "^9.8.0",
