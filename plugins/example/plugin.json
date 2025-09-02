@@ -1,0 +1,27 @@
+{
+  "name": "example",
+  "version": "1.1.0",
+  "description": "Enhanced example plugin demonstrating all plugin API features",
+  "author": "smolit_dev team",
+  "created": "2025-01-20T12:00:00Z",
+  "updated": "2025-01-20T12:00:00Z",
+  "commands": [
+    "example:echo",
+    "example:workspace", 
+    "example:config",
+    "example:bridge",
+    "example:docker",
+    "example:template"
+  ],
+  "dependencies": [],
+  "api_usage": [
+    "sd_log",
+    "sd_warn", 
+    "sd_die",
+    "sd_bridge_send",
+    "sd_config_get",
+    "sd_config_set",
+    "sd_template_render",
+    "sd_docker_run"
+  ]
+}
