@@ -1,0 +1,176 @@
+#!/usr/bin/env node
+/**
+ * sd — legacy help banner + full command list, with new session flags
+ * ESM, Node >= 18
+ */
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import process from "node:process";
+import { getSessionId, emit } from "../lib/sessionBus.js";
+import { runWithStream } from "../lib/run.js";
+
+// --- paths ---------------------------------------------------------------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const BIN_DIR = __dirname;
+const LAUNCH = path.join(BIN_DIR, "sd-launch.cjs");
+const SESSION_CLI = path.join(BIN_DIR, "sd-session.mjs");
+
+// --- banner --------------------------------------------------------------
+function banner() {
+  // Standard-Figlet-ähnlich, fix auf "SMOLIT _dev"
+  return String.raw`
+  ____     __  __    ____     _        ___    _____        
+ / ___|   |  \/  |  / __ \   | |      |_ _|  |_   _|
+ \___ \   | |\/| | | |  | |  | |       | |     | |
+  ___) |  | |  | | | |__| |  | |___    | |     | |
+ |____/   |_|  |_|  \____/   |_____|  |___|    |_|    _dev
+
+ OpenHands + MCP + Claude & Codex Bridge
+ repo helpers: analyze/index/test/next
+ send/init/repl • keys/llm • ports/deps • project/init
+`.trimStart();
+}
+
+// --- legacy command list (display only) ---------------------------------
+const LEGACY_COMMANDS = [
+  ["analyze",          "Repo-Analyse starten"],
+  ["c",                "Kurzform für 'sd send c …'"],
+  ["claude-fu",        "Follow-up (kleine Schritte) an Claude senden"],
+  ["claude-init",      "Supervisor-Init-Prompt an Claude senden"],
+  ["codex-brief",      "Übergabe-Briefing an Codex senden"],
+  ["deps:doctor",      "Dependency-Check"],
+  ["deps:install",     "Setup-Hinweise anzeigen"],
+  ["deps:install-global", "Globale CLIs installieren"],
+  ["guardrails",       "Guardrails/Policy an Claude senden"],
+  ["index",            "aktuelles Repo indexieren (Knowledge-Map)"],
+  ["init",             ".claude + .openhands Setup anlegen"],
+  ["keys:init",        "API-Keys setzen (optional)"],
+  ["llm:list",         "Modelle aus LM Studio anzeigen"],
+  ["llm:use",          "bevorzugtes Modell merken (SD_LLM_MODEL)"],
+  ["logs",             "Log-Verzeichnis anzeigen (mit -f: folgen)"],
+  ["mcp:status",       "MCP-Status (healthz + ggf. 'claude -p \"/mcp\"')"],
+  ["next",             "nächste Schritte erzeugen"],
+  ["norm",             "Nutzer-Text normalisieren"],
+  ["plugin:create",    "Create a new plugin"],
+  ["plugin:disable",   "Disable a plugin"],
+  ["plugin:enable",    "Enable a plugin"],
+  ["plugin:install",   "Install plugin from git"],
+  ["plugin:list",      "Show available plugins"],
+  ["plugin:reload",    "Reload plugins"],
+  ["plugin:test",      "Test a plugin"],
+  ["ports:doctor",     "Port-Kollisionen prüfen"],
+  ["probe-bridge",     "Bridge Routen-/Methoden-Autodetect"],
+  ["project:init",     ".claude/settings.json (MCP SSE) erzeugen"],
+  ["send:c",           "Änderungs-/Follow-up-Prompt senden"],
+  ["send:init",        "Initial-/Ziel-Prompt senden"],
+  ["start",            "Stack starten & Logs im Vordergrund folgen"],
+  ["start-repl",       "interaktive Session (GUI parallel nutzbar)"],
+  ["status",           "Health-Checks"],
+  ["stop",             "Stack stoppen (Bridge + OpenHands)"],
+  ["test",             "Tests laufen lassen + Patch-Vorschläge"],
+  ["up",               "Stack im Hintergrund + Browser öffnen"],
+];
+
+// --- help printer --------------------------------------------------------
+function printHelp() {
+  const envFile   = process.env.ENV_FILE || path.join(process.env.HOME || "~", ".config/smolit_dev/.env");
+  const workspace = process.env.WORKSPACE || path.join(process.env.HOME || "~", "OpenHands_Workspace");
+  const ports = {
+    OH: process.env.SD_PORT_OH || "3000",
+    SEQ: process.env.SD_PORT_SEQ || "8811",
+    MEM: process.env.SD_PORT_MEM || "8812",
+    BRIDGE: process.env.SD_PORT_BRIDGE || "8816",
+  };
+
+  const cmdWidth = Math.max(...LEGACY_COMMANDS.map(([c]) => c.length)) + 2;
+  const lines = LEGACY_COMMANDS
+    .map(([c, d]) => `  ${c.padEnd(cmdWidth, " ")}${d}`)
+    .join("\n");
+
+  console.log(banner());
+  console.log(`\nUsage: sd [--session <id>] [--session-name <name>] [--no-ws] [--jsonl <path>] <command> [args...]
+       sd session <subcommand>\n`);
+  console.log("Commands:\n" + lines + "\n");
+  console.log("Env:");
+  console.log(`  ENV_FILE=${envFile}`);
+  console.log(`  WORKSPACE=${workspace}`);
+  console.log(`  Ports: OH=${ports.OH} SEQ=${ports.SEQ} MEM=${ports.MEM} BRIDGE=${ports.BRIDGE}`);
+}
+
+// --- tiny arg parser for our flags --------------------------------------
+function parseArgs(argv) {
+  const out = { flags: {}, rest: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--help" || a === "-h") { out.flags.help = true; continue; }
+    if (a === "--no-ws") { out.flags.noWs = true; continue; }
+    if (a === "--session" && argv[i+1]) { out.flags.session = argv[++i]; continue; }
+    if (a === "--session-name" && argv[i+1]) { out.flags.sessionName = argv[++i]; continue; }
+    if (a === "--jsonl" && argv[i+1]) { out.flags.jsonl = argv[++i]; continue; }
+    out.rest.push(a);
+  }
+  return out;
+}
+
+// --- main ----------------------------------------------------------------
+(async function main() {
+  const { flags, rest } = parseArgs(process.argv.slice(2));
+
+  // Help requested or no command -> show legacy banner/help
+  if (flags.help || rest.length === 0) {
+    printHelp();
+    process.exit(0);
+  }
+
+  // Session env wiring
+  const sessionId = flags.session || getSessionId();
+  process.env.SD_SESSION_ID = sessionId;
+  if (flags.sessionName) process.env.SD_SESSION_NAME = flags.sessionName;
+  if (flags.noWs) process.env.SD_WS_DISABLED = "1";
+  if (flags.jsonl) process.env.SD_JSONL_OVERRIDE = flags.jsonl; // lib/sessionBus.js darf das optional auswerten
+
+  const [cmd, ...args] = rest;
+
+  // Route "sd session <...>" to sd-session.mjs
+  if (cmd === "session") {
+    const p = spawn(process.execPath, [SESSION_CLI, ...args], {
+      stdio: "inherit",
+      env: process.env,
+    });
+    p.on("close", (code) => process.exit(code ?? 0));
+    return;
+  }
+
+  // For help aliases
+  if (cmd === "help" || (cmd === "--help" && args.length === 0)) {
+    printHelp();
+    process.exit(0);
+  }
+
+  // Emit session.started once per invocation
+  emit(sessionId, "session.started", "sd", {
+    cwd: process.cwd(),
+    meta: {
+      name: process.env.SD_SESSION_NAME || path.basename(process.cwd()),
+      argv: process.argv.slice(2),
+    },
+  });
+
+  // Delegate all real commands to the legacy launcher with streaming
+  try {
+    const code = await runWithStream(sessionId, process.execPath, [LAUNCH, cmd, ...args], {
+      cwd: process.cwd(),
+      env: { ...process.env, SD_SESSION_ID: sessionId },
+    });
+
+    emit(sessionId, "session.ended", "sd", { status: code === 0 ? "ok" : "error" });
+    process.exit(code);
+  } catch (err) {
+    emit(sessionId, "error", "sd", { where: "bin/sd", message: String(err?.message || err), stack: String(err?.stack || "") });
+    emit(sessionId, "session.ended", "sd", { status: "error" });
+    console.error(err);
+    process.exit(1);
+  }
+})();
