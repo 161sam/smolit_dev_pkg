@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * sd — legacy help banner + full command list, with new session flags
+ * sd — legacy help banner + full command list, with automatic session id & name
  * ESM, Node >= 18
  */
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { getSessionId, emit } from "../lib/sessionBus.js";
+import { getSessionId, getDefaultSessionName, registerSession, emit } from "../lib/sessionBus.js";
 import { runWithStream } from "../lib/run.js";
 
 // --- paths ---------------------------------------------------------------
@@ -19,7 +19,6 @@ const SESSION_CLI = path.join(BIN_DIR, "sd-session.mjs");
 
 // --- banner --------------------------------------------------------------
 function banner() {
-  // Standard-Figlet-ähnlich, fix auf "SMOLIT _dev"
   return String.raw`
   ____     __  __    ____     _        ___    _____        
  / ___|   |  \/  |  / __ \   | |      |_ _|  |_   _|
@@ -99,7 +98,7 @@ function printHelp() {
   console.log(`  Ports: OH=${ports.OH} SEQ=${ports.SEQ} MEM=${ports.MEM} BRIDGE=${ports.BRIDGE}`);
 }
 
-// --- tiny arg parser for our flags --------------------------------------
+// --- args ---------------------------------------------------------------
 function parseArgs(argv) {
   const out = { flags: {}, rest: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -114,57 +113,50 @@ function parseArgs(argv) {
   return out;
 }
 
-// --- main ----------------------------------------------------------------
+// --- main ---------------------------------------------------------------
 (async function main() {
   const { flags, rest } = parseArgs(process.argv.slice(2));
 
-  // Help requested or no command -> show legacy banner/help
+  // Help or no command -> show
   if (flags.help || rest.length === 0) {
     printHelp();
     process.exit(0);
   }
 
-  // Session env wiring
+  // Auto session id + name
   const sessionId = flags.session || getSessionId();
+  let sessionName = flags.sessionName || process.env.SD_SESSION_NAME || getDefaultSessionName(process.cwd());
+
+  // Wire env + options
   process.env.SD_SESSION_ID = sessionId;
-  if (flags.sessionName) process.env.SD_SESSION_NAME = flags.sessionName;
+  process.env.SD_SESSION_NAME = sessionName;
   if (flags.noWs) process.env.SD_WS_DISABLED = "1";
-  if (flags.jsonl) process.env.SD_JSONL_OVERRIDE = flags.jsonl; // lib/sessionBus.js darf das optional auswerten
+  if (flags.jsonl) process.env.SD_JSONL_OVERRIDE = flags.jsonl;
 
   const [cmd, ...args] = rest;
 
-  // Route "sd session <...>" to sd-session.mjs
+  // Route "sd session <...>"
   if (cmd === "session") {
-    const p = spawn(process.execPath, [SESSION_CLI, ...args], {
-      stdio: "inherit",
-      env: process.env,
-    });
+    // Ensure this session appears in registry even for `sd session` utilities
+    registerSession(sessionId, sessionName, process.cwd());
+    const p = spawn(process.execPath, [SESSION_CLI, ...args], { stdio: "inherit", env: process.env });
     p.on("close", (code) => process.exit(code ?? 0));
     return;
   }
 
-  // For help aliases
-  if (cmd === "help" || (cmd === "--help" && args.length === 0)) {
-    printHelp();
-    process.exit(0);
-  }
-
-  // Emit session.started once per invocation
+  // Emit session started + register
   emit(sessionId, "session.started", "sd", {
     cwd: process.cwd(),
-    meta: {
-      name: process.env.SD_SESSION_NAME || path.basename(process.cwd()),
-      argv: process.argv.slice(2),
-    },
+    meta: { name: sessionName, argv: process.argv.slice(2) },
   });
+  registerSession(sessionId, sessionName, process.cwd());
 
-  // Delegate all real commands to the legacy launcher with streaming
+  // Delegate to legacy launcher with streaming
   try {
     const code = await runWithStream(sessionId, process.execPath, [LAUNCH, cmd, ...args], {
       cwd: process.cwd(),
-      env: { ...process.env, SD_SESSION_ID: sessionId },
+      env: { ...process.env, SD_SESSION_ID: sessionId, SD_SESSION_NAME: sessionName },
     });
-
     emit(sessionId, "session.ended", "sd", { status: code === 0 ? "ok" : "error" });
     process.exit(code);
   } catch (err) {
