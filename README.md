@@ -1,62 +1,106 @@
-# smolit_dev_pkg (sd)
+# smolit_dev_pkg (sd) - Modular Dev-Stack CLI
 
-**sd** ist ein schlanker Dev-Orchestrator:  
+**sd** ist ein schlanker, modularer Dev-Orchestrator:  
 👉 Startet **OpenHands** (Docker), verbindet **MCP (Sequential Thinking + Memory)** und bietet eine **Claude-Bridge** per HTTP.  
-Dazu kommt eine **CLI** mit nützlichen Subcommands für Entwickler*innen und Microagent-Templates.  
+🧩 **Plugin-System** für Bash & JavaScript, modulare Architektur mit klaren Verantwortlichkeiten.  
+⚡ **Erweiterbares CLI** mit Command-Registry und automatischer Plugin-Discovery.
 
 ---
 
 ## 🚀 Quickstart
 
 ```bash
-npm install -g .
+npm install -g smolit-dev
 sd deps doctor
 sd up          # Startet OpenHands (Docker) + Bridge
 sd status      # Health-Check (GUI, MCP, Bridge)
-````
+```
 
-GUI: [http://127.0.0.1:3311](http://127.0.0.1:3311)
+GUI: [http://127.0.0.1:3311](http://127.0.0.1:3311)  
 Bridge: [http://127.0.0.1:8815/healthz](http://127.0.0.1:8815/healthz)
+
+---
+
+## 🧩 Modular Architecture (v0.2.0)
+
+### Struktur
+```
+bin/sd              # Dünner Dispatcher (30 Zeilen)
+lib/                # Thematische Module
+├── core.sh         # Command-Registry, Plugin-System
+├── config.sh       # ENV-Layering, XDG-Pfade
+├── docker.sh       # OpenHands Container-Management
+├── bridge.sh       # Bridge-Kommunikation
+├── prompts.sh      # Template-Rendering
+└── ...            # ports, oh, mcp, llm, repl
+plugins/            # Plugin-Discovery
+├── example/plugin.sh
+└── your-plugin/
+src/                # Node CLI (Phase 2, optional)
+templates/          # Microagent & Prompt Templates
+```
+
+### Plugin-System
+
+**Bash-Plugins** (automatisch geladen):
+```bash
+# ~/.config/smolit_dev/plugins/my-tool/plugin.sh
+my_custom_analyze() { 
+  echo "Analyzing project: $WORKSPACE"
+  # Your custom logic here
+}
+sd_register "analyze:custom" "Custom project analysis" my_custom_analyze
+```
+
+**JavaScript-Plugins** (experimentell):
+```javascript
+// ~/.config/smolit_dev/plugins/my-tool/index.mjs  
+export function register(registerFn, env) {
+  registerFn("my:js-cmd", async (args, env) => {
+    console.log("JS Plugin with args:", args);
+  }, "Custom JS command");
+}
+```
+
+**Plugin-Pfade:**
+- `~/.config/smolit_dev/plugins/*/plugin.sh` (User)
+- `$WORKSPACE/.sd/plugins/*/plugin.sh` (Projekt)
 
 ---
 
 ## ⚙️ Installation & Setup
 
-### 1. Environment
+### 1. Global Installation
 
+```bash
+# NPM Registry
+npm i -g smolit-dev
 
-**Installation lokal**
-```bash
-npm i -g .
-````
-**Installation GitHub**
-```bash
+# GitHub (Latest)
 npm i -g github:161sam/smolit_dev_pkg
-````
-**Setup**
-```bash
+
+# Setup
 sd keys init
 ```
 
-### 2. Docker
+### 2. Dependencies
 
-* OpenHands Container (`openhands/supergateway`) wird automatisch gestartet.
-* Ports:
+**Erforderlich:**
+- Node.js >= 18
+- Docker (für OpenHands)
+- Bash (Linux/macOS) oder Git Bash (Windows)
 
-  * GUI: `3311`
-  * MCP Sequential: `8811`
-  * MCP Memory: `8812`
-  * sd-Bridge: `8815`
-
-### 3. Node.js
-
-* Erfordert Node >= 18
-* Installiert sich als globales CLI (`sd`).
-
-**Installation npm**
+**Optional:**
 ```bash
-npm i -g smolit-dev
-````
+sd deps install-global    # @anthropic-ai/claude-code etc.
+```
+
+### 3. Ports
+
+- GUI: `3311` (OpenHands)
+- MCP Sequential: `8811` 
+- MCP Memory: `8812`
+- sd-Bridge: `8815`
 
 ---
 
@@ -64,21 +108,21 @@ npm i -g smolit-dev
 
 Die `sd`-Pipeline verbindet Eingaben, Analyse und KI-Tools:
 
-1) **User Input (unstrukturiert)**
+1. **User Input (unstrukturiert)**
    * *Einfacher Text oder Datei-Inhalt.*
-2) **OpenHands (strukturierend)**
+2. **OpenHands (strukturierend)**
    * Läuft in Docker
    * Erkennt Intentionen und strukturiert unklare Eingaben
    * Baut daraus einen validierten Prompt
-3) **Claude als Supervisor**
+3. **Claude als Supervisor**
    * Empfängt den strukturierten Prompt von OpenHands
-   * Agiert als „Supervisor“ und orchestriert die Arbeit
+   * Agiert als „Supervisor" und orchestriert die Arbeit
    * Entscheidet, welche Tools/Aktionen erforderlich sind
-4) **Codex als Worker**
+4. **Codex als Worker**
    * Claude beauftragt Codex (oder ein anderes Modell) mit konkreten Aufgaben
    * Codex führt Code-Analysen, Patch-Erstellung und Refactorings durch
    * Ergebnisse werden zurück in den Pipeline-Kontext gespielt
-5) **Memory (MCP)**
+5. **Memory (MCP)**
    * Erkenntnisse und Ergebnisse werden ins MCP Memory geschrieben
    * Bleiben für spätere Iterationen abrufbar
 
@@ -86,24 +130,61 @@ Ergebnis: **Von unstrukturiertem Userinput → strukturierter Prompt → konkret
 
 ---
 
-## 🖥️ CLI
+## 🖥️ CLI Commands
 
+### Stack Management
 ```bash
 sd up              # OpenHands + Bridge starten, GUI öffnen
 sd start           # wie 'up', ohne GUI-Open
 sd stop            # Container & Bridge stoppen
 sd status          # Health-Check
 sd logs            # zeigt Log-Verzeichnis
+sd logs -f         # folgt Bridge + Docker logs
+
 sd deps doctor     # prüft Dependencies
 sd ports doctor    # Port-Kollisionen prüfen
+```
 
+### Project Setup
+```bash
 sd project init    # .claude/settings.json für MCP erzeugen
+sd init            # Vollständiges Projekt-Setup
 sd mcp status      # MCP-Status prüfen
+```
 
+### AI Workflow
+```bash
 sd analyze         # Repo-Analyse starten
 sd index           # aktuelles Repo indexieren (Knowledge-Map)
 sd test            # Tests laufen lassen + Patches
 sd next            # nächste Schritte erzeugen
+
+# Microagent Templates
+sd norm            # Nutzer-Text normalisieren
+sd claude-init     # Supervisor-Init-Prompt an Claude
+sd codex-brief     # Übergabe-Briefing an Codex
+sd claude-fu       # Follow-up (kleine Schritte) 
+sd guardrails      # Guardrails/Policy
+```
+
+### Interactive & Send
+```bash
+sd keys init       # API-Keys setzen
+sd llm list        # Modelle aus LM Studio anzeigen
+sd llm use <id>    # bevorzugtes Modell merken
+
+sd start-repl      # interaktive Session
+sd send init "..."  # Initial-/Ziel-Prompt senden
+sd send c "..."     # Änderungs-/Follow-up-Prompt
+sd c "..."          # Kurzform für 'sd send c ...'
+```
+
+### Development & Plugins  
+```bash
+sd example:echo test        # Test Plugin-System
+sd probe-bridge             # Bridge Routen-Detection
+bash -n lib/*.sh            # Module syntax check
+node src/cli/index.mjs help # Node CLI (experimentell)
 ```
 
 ---
@@ -112,7 +193,7 @@ sd next            # nächste Schritte erzeugen
 
 * **Standardmäßig KEIN** `--dangerously-skip-permissions`.
 * Optional via `SD_BYPASS_PERMISSIONS=1` aktivierbar.
-* Bridge erlaubt nur Tools:
+* Bridge erlaubt nur definierte Tools:
 
   ```bash
   SD_ALLOWED_TOOLS="sequential-thinking,memory-shared,memory,codex-bridge"
@@ -137,251 +218,206 @@ sd next            # nächste Schritte erzeugen
 
 ---
 
-## 📂 Struktur
+## 📂 Projekt-Struktur
 
 ```
-bin/sd              # CLI Entry
-bin/bridge.mjs      # HTTP Bridge (Claude/MCP)
-bin/postinstall.mjs # Idempotentes Setup
-templates/          # Microagent-Templates
-env.example         # Beispiel-Env
+smolit_dev_pkg/
+├─ bin/
+│  ├─ sd                 # Modular CLI Dispatcher
+│  ├─ sd-launch.cjs      # Cross-platform Launcher
+│  ├─ bridge.mjs         # HTTP Bridge (Claude/MCP)
+│  └─ postinstall.mjs    # Idempotentes Setup
+├─ lib/                  # Bash-Module
+│  ├─ core.sh            # Command-Registry & Plugin-System
+│  ├─ config.sh          # ENV-Layering & Template-Rendering
+│  ├─ docker.sh          # OpenHands Container Management
+│  ├─ bridge.sh          # Bridge-Kommunikation
+│  ├─ prompts.sh         # Microagent-Templates
+│  └─ ...               # ports, oh, mcp, llm, repl
+├─ plugins/              # Plugin-Discovery
+│  └─ example/plugin.sh  # Demo Bash-Plugin
+├─ src/                  # Node-CLI (Phase 2, optional)
+│  ├─ cli/index.mjs      # Entry Point
+│  ├─ commands/          # Node-Commands
+│  └─ plugins/           # JS-Plugin Beispiele
+├─ templates/            # Microagent-Templates
+│  ├─ analyze.md         # Repo-Analyse
+│  ├─ send-to-claude.md  # Init-Prompt
+│  ├─ talk-to-claude.md  # Follow-up
+│  └─ ...               # index, test, next, guardrails
+└─ env.example           # Beispiel-Env
 ```
 
 ---
 
-## 📖 User Handbook
+## 📖 Configuration
 
-### Starten
+Die CLI liest `~/.config/smolit_dev/.env` (ENV-Layering).
 
-```bash
-sd up
-```
-
-Öffnet GUI + startet Bridge. Danach können Prompts via Flowise oder n8n durchgereicht werden.
-
-### Konfiguration
-
-Die CLI liest `~/.config/smolit_dev/.env`. 
-
-Wichtige Variablen:
-
-* `WORKSPACE` – wird als `/workspace` in OpenHands gemountet (nur dieses Verzeichnis)
+**Wichtige Variablen:**
+* `WORKSPACE` – wird als `/workspace` in OpenHands gemountet
 * `LM_BASE_URL` – z. B. LM Studio: `http://127.0.0.1:1234/v1`
 * Ports: `OH_PORT`, `SEQ_PORT`, `MEM_PORT`, `BRIDGE_PORT`
-* `CLAUDE_API_KEY` / `CODEX_API_KEY` – werden als `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` an die Bridge exportiert
-* `CLAUDE_MD_PATH` – zusätzliche System-Prompt-Datei für Claude
+* `CLAUDE_API_KEY` / `CODEX_API_KEY` – werden an die Bridge exportiert
+* `CLAUDE_MD_PATH` – zusätzliche System-Prompt-Datei
 * `OH_IMAGE`, `RUNTIME_IMAGE` – Container-Images (optional anpassbar)
 
 ### Microagents
 
-Beim Start kopiert `sd` Templates nach
-`$WORKSPACE/.openhands/microagents/` (falls nicht vorhanden):
+Templates werden nach `$WORKSPACE/.openhands/` kopiert:
 
-- `templates/microagent/send-to-claude.md` – Trigger `@init`, schreibt `init_prompt.txt`, ruft Bridge:  
+- `send-to-claude.md` – Trigger `@init`, ruft Bridge:  
   `http://host.docker.internal:8815/run?file=/workspace/.openhands/prompts/init_prompt.txt`
-- `templates/microagent/talk-to-claude.md` – Trigger `@c`, schreibt `followup_prompt.txt`, ruft Bridge:  
+- `talk-to-claude.md` – Trigger `@c`, ruft Bridge:  
   `http://host.docker.internal:8815/run?file=/workspace/.openhands/prompts/followup_prompt.txt`
-
-Weitere Prompt-Vorlagen liegen unter `templates/prompt/`.
-
-> Wichtig: Der OpenHands-Container erreicht den Host via
-> `host.docker.internal` (in `sd` bereits mit `--add-host …` gesetzt).
-
-### Health-Checks:
-
-```bash
-curl -sSf http://127.0.0.1:3311       # GUI
-curl -sSf http://127.0.0.1:8811/healthz  # SSE seq
-curl -sSf http://127.0.0.1:8812/healthz  # SSE mem
-curl -sSf http://127.0.0.1:8815/healthz  # Bridge
-```
-
-### Typische Probleme
-
-* **Port belegt** → `sd ports doctor`
-* **Docker nicht läuft** → `systemctl start docker`
-* **Bridge EPIPE** → wird automatisch mit Retry behandelt
-
-### Troubleshooting
-
-* **GUI loggt `0.0.0.0:3000`**: Das ist normal (Container-intern). Lokal öffnest du
-  `http://127.0.0.1:3311`.
-* **Bridge 400/invalid file**: Pfade **müssen** mit `/workspace/…` beginnen.
-  Die Bridge mappt auf `$WORKSPACE`.
-* **`claude` nicht gefunden**: Die Bridge fällt auf `npx @anthropic-ai/claude-code` zurück.
-  Optional global installieren:
-  `npm i -g @anthropic-ai/claude-code @openai/codex`
-* **Docker-Permissions**: ggf. User zur `docker`-Gruppe hinzufügen und neu einloggen.
-
-### Logs
-
-```bash
-~/.local/state/smolit_dev/logs/
-```
-
-### Uninstall
-
-```bash
-npm uninstall -g .
-rm -rf ~/.config/smolit_dev ~/.local/state/smolit_dev ~/.cache/smolit_dev
-```
 
 ---
 
 ## 🧑‍💻 Developer Guide
 
-* **Linting**:
+### Plugin Development
 
-  ```bash
-  npm run lint:shell
-  npm run lint:node
-  ```
-* **CI Smoke-Test**:
-
-  ```bash
-  npm run ci:smoke
-  ```
-
-Postinstall-Schutz in CI/Headless-Umgebungen: setze `NO_POSTINSTALL=1` oder `SKIP_POSTINSTALL=1` (wird automatisch in CI beachtet).
-
-* **Packaging-Test**:
-
-  ```bash
-  npm pack
-  ```
-
----
-
-## 🪟🍎 Windows & macOS Hinweise
-
-Diese Sektion fasst die plattformspezifischen Punkte für **sd** zusammen.
-
----
-
-### Voraussetzungen
-
-**macOS**
-- Node.js ≥ 18 (`brew install node`)
-- Docker Desktop (mit „Use gRPC FUSE“ aktiviert empfohlen)
-- (Optional) LM Studio für lokales LLM
-
-**Windows (2 Optionen)**
-1) **Native (empfohlen, wenn Git Bash vorhanden)**  
-   - Node.js ≥ 18 (Windows x64 MSI)  
-   - **Docker Desktop** (Linux-Container-Modus)  
-   - **Git for Windows** (inkl. **Git Bash**)
-2) **WSL2** (Alternative, sehr stabil)  
-   - Windows 10/11 + WSL2 + Ubuntu  
-   - Node.js + Docker Engine innerhalb von WSL2  
-   - `sd` läuft dann wie unter Linux
-
-> **Hinweis:** Der mitgelieferte **Node-Launcher** startet unter Windows automatisch die Bash (`bin/sd-launch.js`). Du kannst optional den Pfad zu Git Bash via `GIT_BASH` setzen.
-
----
-
-### Installation
-
+**Bash-Plugin erstellen:**
 ```bash
-# macOS / Linux
-npm install -g .
+# ~/.config/smolit_dev/plugins/my-plugin/plugin.sh
+my_custom_command() {
+  echo "Custom command with args: $*"
+  # Access all sd modules and functions
+  ensure_oh_dirs
+  start_bridge
+  send_to_bridge_prompt "Custom analysis request"
+}
 
-# Windows (PowerShell oder CMD; nutzt Node-Launcher → Git Bash)
-npm install -g .
+sd_register "my:custom" "My custom command" my_custom_command
 ```
 
-Erstcheck:
+**Plugin aktivieren:**
+```bash
+sd my:custom arg1 arg2    # Automatisch verfügbar
+sd --help                 # Zeigt alle Plugins
+```
+
+### Module Development
+
+**Neues Modul hinzufügen:**
+```bash
+# lib/my-feature.sh
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+my_feature_cmd() {
+  log "Running my feature..."
+  # Use other modules: ensure_oh_dirs, start_bridge, etc.
+}
+
+# Register commands
+sd_register "my-feature" "Custom feature" my_feature_cmd
+```
+
+### Linting & Testing
 
 ```bash
-sd deps doctor
+# Shell-Linting
+npm run lint:shell       # shellcheck lib/*.sh plugins/**/*.sh
+
+# Node-Linting  
+npm run lint             # eslint
+
+# Tests
+npm test                 # Smoke-Tests
+npm run test:modules     # Syntax-Check aller Module
+./bin/sd --help          # Live-Test
+```
+
+### CI Integration
+
+```bash
+# package.json scripts
+"prepack": "chmod +x bin/sd bin/bridge.mjs bin/postinstall.mjs bin/sd-launch.cjs",
+"test": "node tests/run-tests.mjs",
+"lint:shell": "find lib plugins -name '*.sh' -exec shellcheck {} +",
+"test:modules": "bash -n lib/*.sh && echo 'All modules syntax OK'"
 ```
 
 ---
 
-### Start/Stop
+## 🪟🍎 Cross-Platform Support
 
-```bash
-sd up         # OpenHands + Bridge starten, Browser öffnen
-sd status     # Health-Check
-sd stop       # Stack stoppen
-```
-
-Browser-Open:
-
-* macOS nutzt intern `open`, Linux `xdg-open`, Windows `start` (alles automatisch).
-
----
-
-### Pfade & Shell (Windows)
-
-* In **Git Bash** sind Pfade **POSIX-artig**: `C:\Users\you\repo` → `/c/Users/you/repo`
-* Das Volume-Mounting macht `sd` automatisch: `-v "$WORKSPACE:/workspace"`
-* **Tipp:** Räume Leerzeichen in Pfaden durch Anführungszeichen auf:
-
-  ```bash
-  WORKSPACE="/c/Users/you/My Project" sd up
-  ```
-
----
-
-### Docker & Networking
-
-* **Linux**: `host.docker.internal` wird von `sd` via `--add-host` gesetzt.
-* **macOS/Windows**: `host.docker.internal` ist bereits verfügbar.
-* Ports (Standard): GUI `3311`, MCP `8811/8812`, Bridge `8815`.
-
-  ```bash
-  sd ports doctor
-  ```
-
----
-
-### LLM-Konfiguration (LM Studio & Co.)
-
-* Standard: `LM_BASE_URL=http://127.0.0.1:1234/v1` (LM Studio Default)
-* Modelle anzeigen/setzen:
-
-  ```bash
-  sd llm list
-  sd llm use gpt-neoxt-20b  # Beispiel
-  ```
-* Persistent in `~/.config/smolit_dev/.env`:
-
-  ```bash
-  sd keys init
-  ```
-
----
+**Windows:** Node-Launcher startet automatisch Git Bash (`bin/sd-launch.cjs`)
+**macOS/Linux:** Nativer Bash-Support
 
 ### Troubleshooting
 
-* **Port belegt?**
+**Port belegt:**
+```bash
+sd ports doctor
+```
 
-  ```bash
-  sd ports doctor
-  ```
-* **Docker Berechtigungen (Linux):** Benutzer evtl. zur `docker` Gruppe hinzufügen:
+**Docker Berechtigungen (Linux):**
+```bash
+sudo usermod -aG docker $USER  # + neu anmelden
+```
 
-  ```bash
-  sudo usermod -aG docker $USER
-  # danach neu anmelden
-  ```
-* **Firewall-Prompt (Windows/macOS):** Beim ersten Start zulassen.
-* **LM Studio läuft nicht?** Prüfe `LM_BASE_URL`, z. B.:
+**Git Bash nicht gefunden (Windows):**
+```bash
+# PowerShell
+setx GIT_BASH "C:\Program Files\Git"
+```
 
-  ```bash
-  http://127.0.0.1:1234/v1/models
-  ```
-* **Git Bash nicht gefunden (Windows)?** Installiere **Git for Windows** oder setze `GIT_BASH`:
-
-  ```powershell
-  setx GIT_BASH "C:\Program Files\Git"
-  ```
+**Bridge-Probleme:**
+```bash
+sd probe-bridge          # Route-Detection
+sd logs -f               # Live-Logs
+```
 
 ---
 
-### Performance-Tipp
+## 🧪 Testing & Validation
 
-* Für sehr große Repos/Workloads ist **WSL2** (Windows) oder **Docker Desktop mit Ressourcen-Tuning** (macOS) empfehlenswert.
+### Quick Tests
+```bash
+./bin/sd --help                    # Command-Registry
+./bin/sd example:echo test         # Plugin-System  
+./bin/sd deps doctor               # Dependencies
+./bin/sd ports doctor              # Port-Conflicts
+npm test                           # Full test suite
+```
+
+### Module Tests
+```bash
+bash -n lib/*.sh                   # Syntax validation
+source lib/core.sh && echo "✓"     # Manual loading
+npm run test:modules               # Automated check
+```
+
+### Integration Tests
+```bash
+sd up              # Full stack (needs Docker)
+sd status          # Health validation
+sd probe-bridge    # Bridge connectivity
+sd analyze         # AI workflow
+sd stop            # Clean shutdown
+```
+
+---
+
+## 📈 Migration from v0.1.x
+
+✅ **Zero Breaking Changes** – alle bestehenden Kommandos funktionieren identisch.
+
+**Was ist neu:**
+- Modulare Architektur (`lib/*.sh`)  
+- Plugin-System (`plugins/`)
+- Node-CLI Skeleton (`src/`)
+- Erweiterte Tests & Documentation
+
+**Migration:**
+```bash
+npm update -g smolit-dev    # v0.2.x
+sd --help                   # Funktioniert wie vorher
+sd example:echo test        # Neues Plugin-Feature
+```
 
 ---
 
@@ -389,4 +425,28 @@ Browser-Open:
 
 MIT License
 
+## 🤝 Contributing
+
+1. Fork & Clone
+2. `npm install`
+3. Entwickle in `lib/*.sh` (Bash) oder `src/` (Node)  
+4. `npm test && npm run lint:shell`
+5. PR mit Tests
+
+**Plugin-Beiträge:** Gerne! Lege sie in `plugins/community/` ab.
+
 ---
+
+## 🔗 Links
+
+- [NPM Package](https://npmjs.com/package/smolit-dev)
+- [GitHub Repository](https://github.com/161sam/smolit_dev_pkg)
+- [Issue Tracker](https://github.com/161sam/smolit_dev_pkg/issues)
+- [Anthropic Claude](https://claude.ai)
+- [OpenHands](https://github.com/All-Hands-AI/OpenHands)
+
+---
+
+**Version 0.2.0** - Modular Architecture Release  
+**Maintainer:** [161sam](https://github.com/161sam)  
+**Status:** Production Ready, Plugin-System Experimental
