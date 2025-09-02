@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: dim_asset
+    description: "Stammdaten für Assets (ISIN, Symbol, Typ, Status, Zeitgültigkeit per SCD2)."
+    columns:
+      - name: asset_sk
+        description: "Surrogat-Schlüssel (SCD2)."
+        tests: [not_null, unique]
+      - name: asset_id
+        description: "Natürlicher Schlüssel aus Staging."
+        tests: [not_null]
+      - name: symbol
+        description: "Kurzbezeichnung des Assets."
+      - name: type
+        description: "Asset-Typ."
+        tests:
+          - accepted_values:
+              values: ['equity','etf','crypto','fx','commodity','index']
+      - name: is_current
+        description: "Flag für aktuell gültige SCD2-Zeile."
+        tests:
+          - accepted_values: {values: [0,1]}
+
+  - name: fct_price
+    description: "Faktentabelle für Preise (täglich/minütlich)."
+    columns:
+      - name: asset_sk
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_asset')
+              field: asset_sk
+      - name: ts
+        tests: [not_null]
+      - name: close
+        tests:
+          - not_null
+          - non_negative:
+              column_name: close

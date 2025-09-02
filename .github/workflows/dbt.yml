@@ -1,0 +1,49 @@
+name: dbt
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  dbt-build-test-docs:
+    runs-on: ubuntu-latest
+    env:
+      DBT_PROFILES_DIR: etl/dbt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Install dbt (Postgres-Beispiel)
+        run: |
+          python -m pip install -U pip
+          pip install dbt-postgres
+
+      - name: Install deps
+        working-directory: etl/dbt
+        run: dbt deps
+
+      - name: Seed (demo)
+        working-directory: etl/dbt
+        run: dbt seed --full-refresh --vars '{db_schema_raw: seed, db_schema_seed: seed}'
+
+      - name: Build (models + tests)
+        working-directory: etl/dbt
+        run: dbt build --fail-fast --vars '{db_schema_raw: seed}'
+
+      - name: Snapshots (SCD2)
+        working-directory: etl/dbt
+        run: dbt snapshot --vars '{db_schema_raw: seed}'
+
+      - name: Docs generate
+        working-directory: etl/dbt
+        run: dbt docs generate --vars '{db_schema_raw: seed}'
+
+      - name: Upload artifacts (dbt docs site)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-docs-site
+          path: etl/dbt/target

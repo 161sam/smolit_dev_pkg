@@ -1,0 +1,14 @@
+version: 2
+
+exposures:
+  - name: superset_prices_dashboard
+    type: dashboard
+    maturity: medium
+    url: "https://superset.example.com/superset/dashboard/price-overview"
+    description: "Preisübersichtsdashboard in Superset."
+    owner:
+      name: "Data Team"
+      email: "data@infoterminal.local"
+    depends_on:
+      - ref('fct_price')
+      - ref('dim_asset')

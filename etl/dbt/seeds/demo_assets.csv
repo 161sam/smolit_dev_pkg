@@ -1,0 +1,3 @@
+asset_id,symbol,type,status,ingested_at
+A1,ACME,equity,active,2025-01-01T00:00:00Z
+A2,FOO,etf,active,2025-01-01T00:00:00Z

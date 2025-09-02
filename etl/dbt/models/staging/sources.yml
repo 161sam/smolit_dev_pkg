@@ -1,0 +1,40 @@
+version: 2
+
+sources:
+  - name: raw_finance
+    description: "Rohdaten aus Finanz-Pipelines (OpenBB, ETL)."
+    database: "{{ var('db_database', target.database) }}"
+    schema: "{{ var('db_schema_raw', 'raw_finance') }}"
+    tables:
+      - name: assets
+        description: "Roh-Assets (Symbols, ISIN, Typ)."
+        loaded_at_field: ingested_at
+        freshness:
+          warn_after: {count: 24, period: hour}
+          error_after: {count: 72, period: hour}
+        columns:
+          - name: asset_id
+            tests: [not_null]
+          - name: symbol
+            tests: [not_null]
+          - name: type
+            tests:
+              - accepted_values:
+                  values: ['equity','etf','crypto','fx','commodity','index']
+      - name: prices
+        description: "Preiszeitreihen (OHLC, Volume)."
+        loaded_at_field: ingested_at
+        columns:
+          - name: asset_id
+            tests:
+              - not_null
+              - relationships:
+                  to: ref('dim_asset')
+                  field: asset_id
+          - name: ts
+            tests: [not_null]
+          - name: close
+            tests:
+              - not_null
+              - expression_is_true:
+                  expression: "close >= 0"
