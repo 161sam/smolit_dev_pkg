@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
 #  sd  —  smolit_dev CLI (modular)  
-#  sd  —  smolit_dev CLI (modular)  
 #  One-command Dev-Stack: OpenHands (Docker) + MCP (SSE) + Claude & Codex Bridge
 #  Requirements: bash, docker, node>=18, curl (jq optional)
 #  Cross-platform: Linux, macOS; Windows via Node-Launcher + Git Bash
@@ -10,7 +9,6 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-# ===== Cleanup & Paths =====
 # ===== Cleanup & Paths =====
 cleanup() { :; }
 trap cleanup EXIT
