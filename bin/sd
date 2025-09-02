@@ -1,33 +1,58 @@
-#!/usr/bin/env bash
-# ==============================================================================
-#  sd  —  smolit_dev CLI (modular)  
-#  One-command Dev-Stack: OpenHands (Docker) + MCP (SSE) + Claude & Codex Bridge
-#  Requirements: bash, docker, node>=18, curl (jq optional)
-#  Cross-platform: Linux, macOS; Windows via Node-Launcher + Git Bash
-# ==============================================================================
+#!/usr/bin/env node
+import { getSessionId, emit } from '../lib/sessionBus.js';
+import { runWithStream } from '../lib/run.js';
 
-set -Eeuo pipefail
-IFS=$'\n\t'
+function usage() {
+  console.log(`Usage: sd [--session <id>] [--session-name <name>] [--no-ws] [--jsonl <path>] <cmd> [args...]\n       sd session <subcommand>`);
+}
 
-# ===== Cleanup & Paths =====
-cleanup() { :; }
-trap cleanup EXIT
+async function main() {
+  const args = process.argv.slice(2);
+  let sessionId = getSessionId();
+  let sessionName;
+  const cmdArgs = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--help' || a === '-h') {
+      usage();
+      return;
+    } else if (a === '--session' && args[i + 1]) {
+      sessionId = args[++i];
+    } else if (a === '--session-name' && args[i + 1]) {
+      sessionName = args[++i];
+    } else if (a === '--no-ws') {
+      process.env.SD_WS_DISABLED = '1';
+    } else if (a === '--jsonl' && args[i + 1]) {
+      process.env.SD_SESSION_FILE = args[++i];
+    } else {
+      cmdArgs.push(a, ...args.slice(i + 1));
+      break;
+    }
+  }
+  process.env.SD_SESSION_ID = sessionId;
+  emit(sessionId, 'session.started', 'sd', {
+    cwd: process.cwd(),
+    meta: sessionName ? { name: sessionName } : undefined,
+  });
+  if (cmdArgs.length === 0) {
+    usage();
+    emit(sessionId, 'session.ended', 'sd', { status: 'ok' });
+    return;
+  }
+  if (cmdArgs[0] === 'session') {
+    const mod = await import('./sd-session.mjs');
+    await mod.cli(cmdArgs.slice(1));
+    emit(sessionId, 'session.ended', 'sd', { status: 'ok' });
+    return;
+  }
+  const cmd = cmdArgs[0];
+  const rest = cmdArgs.slice(1);
+  const code = await runWithStream(sessionId, cmd, rest, {});
+  emit(sessionId, 'session.ended', 'sd', { status: code === 0 ? 'ok' : 'error' });
+  process.exit(code);
+}
 
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SELF_DIR/.." && pwd)"
-
-# ===== Load Core Modules =====
-source "$ROOT_DIR/lib/core.sh"
-source "$ROOT_DIR/lib/config.sh"
-
-# ===== Load All Other Modules =====
-for f in "$ROOT_DIR/lib/"*.sh; do
-  [[ "$f" =~ /(core|config)\.sh$ ]] || source "$f" 2>/dev/null || true
-done
-
-# ===== Load Plugins =====
-load_plugins "$CONF_DIR/plugins"
-load_plugins "$WORKSPACE/.sd/plugins"
-
-# ===== Dispatch =====
-sd_dispatch "$@"
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
