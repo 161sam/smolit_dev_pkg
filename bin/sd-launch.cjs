@@ -16,7 +16,11 @@ function findBashOnWindows() {
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe')
   ].filter(Boolean);
   for (const cand of cands) {
-    try { if (fs.existsSync(cand)) return cand; } catch {}
+    try {
+      if (fs.existsSync(cand)) return cand;
+    } catch (e) {
+      /* ignore */
+    }
   }
   return null;
 }
