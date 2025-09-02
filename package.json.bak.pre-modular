@@ -1,7 +1,7 @@
 {
   "name": "smolit-dev",
-  "version": "0.2.0",
-  "description": "One-command Dev-Stack: OpenHands + MCP (SSE) + Claude-Bridge — modular CLI mit Plugin-System.",
+  "version": "0.1.0",
+  "description": "One-command Dev-Stack: OpenHands + MCP (SSE) + Claude-Bridge — mit GUI & CLI.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -12,9 +12,6 @@
     "bin/sd-launch.cjs",
     "bin/bridge.mjs",
     "bin/postinstall.mjs",
-    "lib/",
-    "plugins/",
-    "src/",
     "templates/",
     "env.example",
     "README.md",
@@ -26,9 +23,8 @@
     "lint": "eslint .",
     "format": "prettier -w .",
     "format:check": "prettier -c .",
-    "lint:shell": "command -v shellcheck >/dev/null 2>&1 && find lib plugins -name '*.sh' -exec shellcheck {} + || echo 'shellcheck not installed'",
+    "lint:shell": "command -v shellcheck >/dev/null 2>&1 && shellcheck bin/sd || echo 'shellcheck not installed'",
     "test": "node tests/run-tests.mjs",
-    "test:modules": "bash -n lib/*.sh && echo 'All modules syntax OK'",
     "ci:smoke": "node ./bin/postinstall.mjs --dry-run && ./bin/sd --help || true"
   },
   "engines": {
@@ -39,9 +35,7 @@
     "mcp",
     "claude",
     "devstack",
-    "cli",
-    "modular",
-    "plugins"
+    "cli"
   ],
   "repository": {
     "type": "git",
@@ -51,7 +45,8 @@
     "url": "https://github.com/161sam/smolit_dev_pkg/issues"
   },
   "homepage": "https://github.com/161sam/smolit_dev_pkg#readme",
-  "preferGlobal": true,
+  "preferGlobal": true
+  ,
   "devDependencies": {
     "@eslint/js": "^9.8.0",
     "eslint": "^9.8.0",
