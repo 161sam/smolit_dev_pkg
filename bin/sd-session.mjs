@@ -1,48 +1,46 @@
 #!/usr/bin/env node
-import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { readFileSync, watch } from 'node:fs';
-import { getSessionFile } from '../lib/sessionBus.js';
+// sd session <subcommand>
+import process from "node:process";
+import { listSessions } from "../lib/sessionBus.js";
+
+const [sub, ...rest] = process.argv.slice(2);
 
 function usage() {
-  console.log(`sd session new [name]\n sd session attach <id>\n sd session tail <id>`);
+  console.log(`Usage:
+  sd session list            # recent sessions
+  sd session help            # this help
+`);
 }
 
-export async function cli(argv) {
-  const [cmd, ...rest] = argv;
-  if (cmd === 'new') {
-    const id = randomUUID();
-    const json = {
-      session_id: id,
-      export: `export SD_SESSION_ID=${id}`,
-      name: rest[0],
-    };
-    console.log(JSON.stringify(json));
-  } else if (cmd === 'attach') {
-    const id = rest[0];
-    if (!id) return usage();
-    const shell = process.env.SHELL || '/bin/sh';
-    const child = spawn(shell, { stdio: 'inherit', env: { ...process.env, SD_SESSION_ID: id } });
-    child.on('exit', (c) => process.exit(c ?? 0));
-  } else if (cmd === 'tail') {
-    const id = rest[0];
-    if (!id) return usage();
-    const file = getSessionFile(id);
-    try {
-      process.stdout.write(readFileSync(file, 'utf8'));
-    } catch {}
-    watch(file, { encoding: 'utf8' }, (evt) => {
-      if (evt === 'change') {
-        try {
-          process.stdout.write(readFileSync(file, 'utf8'));
-        } catch {}
-      }
-    });
-  } else {
-    usage();
+if (!sub || sub === "help" || sub === "--help" || sub === "-h") {
+  usage();
+  process.exit(0);
+}
+
+if (sub === "list") {
+  const rows = listSessions(200);
+  if (!rows.length) {
+    console.log("No sessions found.");
+    process.exit(0);
   }
+  const pad = (s, n) => String(s || "").padEnd(n, " ");
+  const W = { id: 36, name: 22, cwd: 36, ts: 20 };
+  console.log(
+    pad("SESSION_ID", W.id) + "  " +
+    pad("NAME", W.name) + "  " +
+    pad("CWD", W.cwd) + "  " +
+    pad("CREATED", W.ts)
+  );
+  for (const s of rows) {
+    console.log(
+      pad(s.session_id, W.id) + "  " +
+      pad(s.name, W.name) + "  " +
+      pad(s.cwd, W.cwd) + "  " +
+      pad(s.created_at, W.ts)
+    );
+  }
+  process.exit(0);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  cli(process.argv.slice(2));
-}
+usage();
+process.exit(1);
