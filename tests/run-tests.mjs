@@ -4,8 +4,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 function run(cmd, args = [], opts = {}) {
-  const r = spawnSync(cmd, args, { stdio: 'pipe', encoding: 'utf8', ...opts });
-  return r;
+  return spawnSync(cmd, args, { stdio: 'pipe', encoding: 'utf8', ...opts });
 }
 
 function okExit(res, name) {
@@ -32,5 +31,14 @@ assert.ok(help.stdout.includes('Usage') || help.stdout.length > 0, 'sd --help ou
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 assert.equal(pkg.bin.sd, 'bin/sd-launch.cjs', 'bin mapping points to sd-launch.cjs');
 
-console.log('[test] All smoke tests passed.');
+// 5) Detailed tests
+for (const t of [
+  'tests/session-bus.test.mjs',
+  'tests/run-stream.test.mjs',
+  'tests/ws-hub.test.mjs',
+]) {
+  const r = run('node', [t], { env: { ...process.env } });
+  okExit(r, t);
+}
 
+console.log('[test] All smoke tests passed.');
