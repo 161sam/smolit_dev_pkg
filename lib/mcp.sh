@@ -3,6 +3,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Idempotent sourcing guard
+if [[ "${SD_MCP_SH_LOADED:-0}" = "1" ]]; then
+  return 0
+fi
+SD_MCP_SH_LOADED=1
+
 # ===== MCP / Project Setup =====
 project_init() {
   local cfg="$WORKSPACE/.claude/settings.json"

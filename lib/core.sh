@@ -3,6 +3,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Idempotent sourcing guard
+if [[ "${SD_CORE_SH_LOADED:-0}" = "1" ]]; then
+  return 0
+fi
+SD_CORE_SH_LOADED=1
+
 # ===== Colors (TTY-safe) =====
 if [[ -t 1 ]]; then
   cCyan=$'\e[36m'; cYel=$'\e[33m'; cRed=$'\e[31m'; cDim=$'\e[2m'; cOff=$'\e[0m'

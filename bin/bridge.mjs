@@ -19,6 +19,39 @@ const ALLOWED =
   arg("--allowed-tools", process.env.SD_ALLOWED_TOOLS) ||
   "sequential-thinking,memory-shared,memory,codex-bridge";
 
+// Safety limits
+const MAX_OUTPUT_BYTES = Number(process.env.BRIDGE_MAX_OUTPUT_BYTES || 5_000_000); // 5MB
+const MAX_STDERR_BYTES = Number(process.env.BRIDGE_MAX_STDERR_BYTES || 500_000);   // 0.5MB
+const CHILD_TIMEOUT_MS = Number(process.env.BRIDGE_CHILD_TIMEOUT_MS || 120_000);   // 120s
+const MAX_CONCURRENCY  = Number(process.env.BRIDGE_MAX_CONCURRENCY  || 2);
+const MAX_QUEUE        = Number(process.env.BRIDGE_MAX_QUEUE        || 64);
+
+// Simple global concurrency limiter
+let inflight = 0;
+const queue = [];
+function pumpQueue() {
+  while (inflight < MAX_CONCURRENCY && queue.length) {
+    const { task, resolve, reject } = queue.shift();
+    inflight++;
+    Promise.resolve()
+      .then(task)
+      .then((v) => { inflight--; pumpQueue(); resolve(v); })
+      .catch((e) => { inflight--; pumpQueue(); reject(e); });
+  }
+}
+function schedule(task) {
+  return new Promise((resolve, reject) => {
+    if (queue.length >= MAX_QUEUE) {
+      const e = new Error("Bridge busy (queue full)");
+      e.status = 503;
+      reject(e);
+      return;
+    }
+    queue.push({ task, resolve, reject });
+    pumpQueue();
+  });
+}
+
 /* ---------- helpers ---------- */
 const mapWorkspaceFile = (filePath) => {
   // normalize posix-style for container-like paths
@@ -64,28 +97,53 @@ const callClaude = async (prompt) => {
   };
 
   const run = (useFlags = true) =>
-    new Promise((resolve, reject) => {
+    schedule(() => new Promise((resolve, reject) => {
       const args = ["@anthropic-ai/claude-code", "--print", "-p", prompt];
       if (useFlags) {
         if (ALLOWED) args.push("--allowed-tools", ALLOWED);
         if (DANGEROUS) args.push("--dangerously-skip-permissions");
       }
       const child = spawn("npx", args, { env, stdio: ["ignore", "pipe", "pipe"] });
-      let out = "",
-        err = "";
-      child.stdout.on("data", (d) => (out += d));
-      child.stderr.on("data", (d) => (err += d));
-      child.on("error", reject);
-      child.on("close", (code, signal) => {
-        if (code !== 0)
-          return reject(
-            new Error(
-              `claude exited code=${code} signal=${signal} stderr=${err.trim()}`
-            )
-          );
-        resolve(out);
+      let out = "";
+      let err = "";
+      let outBytes = 0;
+      let errBytes = 0;
+      let settled = false;
+      const finish = (fn) => (v) => { if (!settled) { settled = true; fn(v); } };
+      const onReject = finish(reject);
+      const onResolve = finish(resolve);
+      const timer = setTimeout(() => {
+        onReject(new Error(`claude timed out after ${CHILD_TIMEOUT_MS}ms`));
+        try { child.kill('SIGKILL'); } catch {}
+      }, CHILD_TIMEOUT_MS);
+      child.stdout.on("data", (d) => {
+        outBytes += d.length;
+        if (outBytes > MAX_OUTPUT_BYTES) {
+          onReject(new Error("Output too large"));
+          try { child.kill('SIGKILL'); } catch {}
+          return;
+        }
+        out += d.toString("utf8");
       });
-    });
+      child.stderr.on("data", (d) => {
+        errBytes += d.length;
+        if (errBytes > MAX_STDERR_BYTES) {
+          // Stop collecting more stderr to avoid memory bloat
+          return;
+        }
+        err += d.toString("utf8");
+      });
+      child.on("error", onReject);
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        if (settled) return;
+        if (code !== 0) {
+          onReject(new Error(`claude exited code=${code} signal=${signal} stderr=${err.trim()}`));
+        } else {
+          onResolve(out);
+        }
+      });
+    }));
 
   try {
     return await run(true); // first try with flags

@@ -3,6 +3,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Idempotent sourcing guard
+if [[ "${SD_LLM_SH_LOADED:-0}" = "1" ]]; then
+  return 0
+fi
+SD_LLM_SH_LOADED=1
+
 # ===== Keys & LLM Management =====
 keys_init() {
   mkdir -p "$(dirname "$ENV_FILE")"

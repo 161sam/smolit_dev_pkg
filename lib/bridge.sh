@@ -3,6 +3,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Idempotent sourcing guard
+if [[ "${SD_BRIDGE_SH_LOADED:-0}" = "1" ]]; then
+  return 0
+fi
+SD_BRIDGE_SH_LOADED=1
+
 # ===== Bridge Management =====
 start_bridge() {
   require_node18

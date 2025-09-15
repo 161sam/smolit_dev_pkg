@@ -5,7 +5,9 @@ const path = require('path');
 const fs = require('fs');
 
 const here = __dirname;
-const bashScript = path.join(here, 'sd');
+// IMPORTANT: launch the legacy bash CLI, not the Node entry (bin/sd),
+// to avoid recursion (Node sd -> launcher -> Node sd -> ...)
+const bashScript = path.join(here, 'sd.bak.pre-modular');
 
 function findBashOnWindows() {
   const cands = [

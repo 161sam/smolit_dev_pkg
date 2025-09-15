@@ -3,6 +3,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Idempotent sourcing guard
+if [[ "${SD_REPL_SH_LOADED:-0}" = "1" ]]; then
+  return 0
+fi
+SD_REPL_SH_LOADED=1
+
 # ===== REPL / Send Shortcuts =====
 start_repl() {
   start_bridge

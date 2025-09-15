@@ -3,6 +3,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Idempotent sourcing guard
+if [[ "${SD_PORTS_SH_LOADED:-0}" = "1" ]]; then
+  return 0
+fi
+SD_PORTS_SH_LOADED=1
+
 # ===== Port Checking =====
 _port_in_use() {
   local port="$1"

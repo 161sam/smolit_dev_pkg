@@ -3,6 +3,12 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+# Idempotent sourcing guard
+if [[ "${SD_CONFIG_SH_LOADED:-0}" = "1" ]]; then
+  return 0
+fi
+SD_CONFIG_SH_LOADED=1
+
 # ===== XDG Paths (inherit from parent if set) =====
 if [[ -z "${CONF_DIR:-}" ]]; then
   XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -42,13 +48,19 @@ SD_LLM_MODEL="${SD_LLM_MODEL:-}"
 SD_BYPASS_PERMISSIONS="${SD_BYPASS_PERMISSIONS:-}"
 SD_ALLOWED_TOOLS="${SD_ALLOWED_TOOLS:-sequential-thinking,memory-shared,memory,codex-bridge}"
 
-# Binary paths
-SELF_DIR="${SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-BRIDGE_BIN="${SD_BRIDGE_BIN:-$SELF_DIR/../bin/bridge.mjs}"
-POSTINSTALL_BIN="$SELF_DIR/../bin/postinstall.mjs"
+# Binary paths and templates (resolve relative to this file)
+# Determine directories robustly without relying on external definitions
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$LIB_DIR/.." && pwd)"
 
-# Template directory  
-TEMPLATE_DIR="${SD_TEMPLATE_DIR:-$SELF_DIR/../templates}"
+# Keep SELF_DIR for backward compatibility (points to ROOT_DIR)
+SELF_DIR="${SELF_DIR:-$ROOT_DIR}"
+
+BRIDGE_BIN="${SD_BRIDGE_BIN:-$ROOT_DIR/bin/bridge.mjs}"
+POSTINSTALL_BIN="$ROOT_DIR/bin/postinstall.mjs"
+
+# Template directory
+TEMPLATE_DIR="${SD_TEMPLATE_DIR:-$ROOT_DIR/templates}"
 
 # ===== Config Helpers =====
 write_env_kv() {
