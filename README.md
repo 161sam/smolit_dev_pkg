@@ -74,7 +74,7 @@ export function register(registerFn, env) {
 
 ```bash
 # NPM Registry
-npm i -g smolit-dev
+npm i -g smolit-dev (demnächst verfügbar)
 
 # GitHub (Latest)
 npm i -g github:161sam/smolit_dev_pkg
