@@ -8,6 +8,7 @@
     "sd": "bin/sd-launch.cjs"
   },
   "files": [
+    "bin/sd.bak.pre-modular",
     "bin/sd",
     "bin/sd-launch.cjs",
     "bin/bridge.mjs",
@@ -21,7 +22,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "prepack": "chmod +x bin/sd bin/bridge.mjs bin/postinstall.mjs bin/sd-launch.cjs",
+    "prepack": "chmod +x bin/sd bin/sd.bak.pre-modular bin/bridge.mjs bin/postinstall.mjs bin/sd-launch.cjs",
     "postinstall": "node ./bin/postinstall.mjs",
     "lint": "eslint .",
     "format": "prettier -w .",
